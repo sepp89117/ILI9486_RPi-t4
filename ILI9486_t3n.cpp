@@ -1,51 +1,6 @@
-// https://github.com/PaulStoffregen/ILI9341_t3n
-// http://forum.pjrc.com/threads/26305-Highly-optimized-ILI9341-(320x240-TFT-color-display)-library
-
-/***************************************************
-  This is our library for the Adafruit ILI9341 Breakout and Shield
-  ----> http://www.adafruit.com/products/1651
-
-  Check out the links above for our tutorials and wiring diagrams
-  These displays use SPI to communicate, 4 or 5 pins are required to
-  interface (RST is optional)
-  Adafruit invests time and resources providing this open source code,
-  please support Adafruit and open-source hardware by purchasing
-  products from Adafruit!
-
-  Written by Limor Fried/Ladyada for Adafruit Industries.
-  MIT license, all text above must be included in any redistribution
- ****************************************************/
-// <SoftEgg>
-
-//Additional graphics routines by Tim Trzepacz, SoftEgg LLC added December 2015
-//(And then accidentally deleted and rewritten March 2016. Oops!)
-//Gradient support
-//----------------
-//		fillRectVGradient	- fills area with vertical gradient
-//		fillRectHGradient	- fills area with horizontal gradient
-//		fillScreenVGradient - fills screen with vertical gradient
-// 	fillScreenHGradient - fills screen with horizontal gradient
-
-//Additional Color Support
-//------------------------
-//		color565toRGB		- converts 565 format 16 bit color to RGB
-//		color565toRGB14		- converts 16 bit 565 format color to 14 bit RGB (2 bits clear for math and sign)
-//		RGB14tocolor565		- converts 14 bit RGB back to 16 bit 565 format color
-
-//Low Memory Bitmap Support
-//-------------------------
-// 		writeRect8BPP - 	write 8 bit per pixel paletted bitmap
-// 		writeRect4BPP - 	write 4 bit per pixel paletted bitmap
-// 		writeRect2BPP - 	write 2 bit per pixel paletted bitmap
-// 		writeRect1BPP - 	write 1 bit per pixel paletted bitmap
-
-//TODO: transparent bitmap writing routines for sprites
-
-//String Pixel Length support
-//---------------------------
-//		strPixelLen			- gets pixel length of given ASCII string
-
-// <\SoftEgg>
+// This library is for Waveshare 4inch RPi LCD (C) with ILI9486 and Teensy 4.x usage only
+// Forked from:
+// https://github.com/kurte/ILI9341_t3n
 
 #include "ILI9486_t3n.h"
 #include <SPI.h>  
@@ -69,7 +24,7 @@ DMAChannel 	ILI9486_t3n::_dmatx;
 #elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
 //DMASetting 	ILI9486_t3n::_dmasettings[4];
 //DMAChannel 	ILI9486_t3n::_dmatx;
-#else
+#elif defined(__MK64FX512__)
 // T3.5 - had issues scatter/gather so do just use channels/interrupts
 // and update and continue
 DMAChannel  ILI9486_t3n::_dmatx;
@@ -116,7 +71,7 @@ void ILI9486_t3n::dmaInterrupt(void) {
 #endif
 
 #ifdef DEBUG_ASYNC_UPDATE
-extern void dumpDMA_TCD(DMABaseClass *dmabc);
+extern void dumpDMA_TCD(DMABaseClass *dmabc, const char *psx_title);
 #endif
 
 void ILI9486_t3n::process_dma_interrupt(void) {
@@ -125,41 +80,66 @@ void ILI9486_t3n::process_dma_interrupt(void) {
 #endif
 #if defined(__MK66FX1M0__) 
 	// T3.6
-	_dma_frame_count++;
 	_dmatx.clearInterrupt();
-
-	// See if we are in continuous mode or not..
-	if ((_dma_state & ILI9486_DMA_CONT) == 0) {
-		// We are in single refresh mode or the user has called cancel so
-		// Lets try to release the CS pin
-		waitFifoNotFull();
-		writecommand_last(ILI9486_NOP);
-		endSPITransaction();
-		_dma_state &= ~ILI9486_DMA_ACTIVE;
-		_dmaActiveDisplay = 0;	// We don't have a display active any more... 
+	#ifdef DEBUG_ASYNC_UPDATE
+	static uint8_t print_count;
+	if (print_count < 10) {
+		print_count++;
+		Serial.printf("TCD: %x D1:%x %x%c\n", (uint32_t)_dmatx.TCD->SADDR , 
+					(uint32_t)_dmasettings[1].TCD->SADDR,  (uint32_t)_dmatx.TCD->DLASTSGA,
+					(_dmatx.TCD->SADDR > _dmasettings[1].TCD->SADDR)? '>' : '<');
 
 	}
-#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
-	// T4
-
-	bool still_more_dma = true;
-	_dma_sub_frame_count++;
-//	Serial.print(".");
-	if (_dma_sub_frame_count == _dma_cnt_sub_frames_per_frame) {
-	#ifdef DEBUG_ASYNC_LEDS
-		digitalWriteFast(DEBUG_PIN_3, HIGH);
 	#endif
-		//Serial.println("*");
-		// We completed a frame. 
+	if (_frame_callback_on_HalfDone && (_dmatx.TCD->SADDR > _dmasettings[1].TCD->SADDR)) {
+		_dma_sub_frame_count = 1;	// set as partial frame.
+	} else {
 		_dma_frame_count++;
-		// See if we are logically done
-		if (_dma_state & ILI9486_DMA_FINISH) {
-			//Serial.println("$");
-			still_more_dma = false;
 
+		// See if we are in continuous mode or not..
+		if ((_dma_state & ILI9486_DMA_CONT) == 0) {
 			// We are in single refresh mode or the user has called cancel so
 			// Lets try to release the CS pin
-			// Lets wait until FIFO is not empty
+			waitFifoNotFull();
+			writecommand_last(ILI9486_NOP);
+			endSPITransaction();
+			_dma_state &= ~ILI9486_DMA_ACTIVE;
+			_dmaActiveDisplay = 0;	// We don't have a display active any more... 
+		}
+		_dma_sub_frame_count = 0;	// set as partial frame.
+	}
+	if (_frame_complete_callback) (*_frame_complete_callback)();
+	// See if we should do call back or not...
+#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
+	// T4
+	#ifdef DEBUG_ASYNC_UPDATE
+	static uint8_t print_count;
+	if (print_count < 10) {
+		print_count++;
+		Serial.printf("TCD: %x D1:%x %x%c\n", (uint32_t)_dmatx.TCD->SADDR , 
+					(uint32_t)_dmasettings[1].TCD->SADDR,  (uint32_t)_dmatx.TCD->DLASTSGA,
+					(_dmatx.TCD->SADDR > _dmasettings[1].TCD->SADDR)? '>' : '<');
+
+	}
+	#endif
+	_dmatx.clearInterrupt();
+	if (_frame_callback_on_HalfDone && (_dmatx.TCD->SADDR > _dmasettings[1].TCD->SADDR)) {
+		_dma_sub_frame_count = 1;	// set as partial frame.
+		if (_frame_complete_callback) (*_frame_complete_callback)();
+		//Serial.print("-");
+	} else {
+
+		_dma_frame_count++;
+		_dma_sub_frame_count = 0;
+		//Serial.print(".");
+		//if ((_dma_frame_count & 0x1f) == 0)Serial.println();
+		#ifdef DEBUG_ASYNC_LEDS
+			digitalWriteFast(DEBUG_PIN_3, HIGH);
+		#endif
+		// See if we are in continuous mode or not..
+		if ((_dma_state & ILI9486_DMA_CONT) == 0) {
+			// We are in single refresh mode or the user has called cancel so
+			// Lets try to release the CS pin
 			//Serial.printf("Before FSR wait: %x %x\n", _pimxrt_spi->FSR, _pimxrt_spi->SR);
 			while (_pimxrt_spi->FSR & 0x1f)  ;	// wait until this one is complete
 
@@ -174,51 +154,26 @@ void ILI9486_t3n::process_dma_interrupt(void) {
 			_pimxrt_spi->CR = LPSPI_CR_MEN | LPSPI_CR_RRF | LPSPI_CR_RTF;   // actually clear both...
 			_pimxrt_spi->SR = 0x3f00;	// clear out all of the other status...
 
-
-			maybeUpdateTCR(LPSPI_TCR_PCS(0) | LPSPI_TCR_FRAMESZ(7));	// output Command with 8 bits
+			maybeUpdateTCR(_tcr_dc_assert | LPSPI_TCR_FRAMESZ(7));	// output Command with 8 bits
 			// Serial.printf("Output NOP (SR %x CR %x FSR %x FCR %x %x TCR:%x)\n", _pimxrt_spi->SR, _pimxrt_spi->CR, _pimxrt_spi->FSR, 
 			//	_pimxrt_spi->FCR, _spi_fcr_save, _pimxrt_spi->TCR);
 			writecommand_last(ILI9486_NOP);
-
-			// Serial.println("Do End transaction");
 			endSPITransaction();
-			_dma_state &= ~(ILI9486_DMA_ACTIVE | ILI9486_DMA_FINISH);
+			_dma_state &= ~ILI9486_DMA_ACTIVE;
 			_dmaActiveDisplay[_spi_num]  = 0;	// We don't have a display active any more... 
-
- 			// Serial.println("After End transaction");
-			//Serial.println("$");
+		} else {
+			// Lets try to flush out memory
+			if (_frame_complete_callback) (*_frame_complete_callback)();
+			else if ((uint32_t)_pfbtft >= 0x20200000u)  arm_dcache_flush(_pfbtft, CBALLOC);
 		}
-		_dma_sub_frame_count = 0;
-#ifdef DEBUG_ASYNC_LEDS
-		digitalWriteFast(DEBUG_PIN_3, LOW);
-#endif
+		#ifdef DEBUG_ASYNC_LEDS
+			digitalWriteFast(DEBUG_PIN_3, LOW);
+		#endif
 	}
-
-	if (still_more_dma) {
-		// we are still in a sub-frame so we need to copy memory down...
-		if (_dma_sub_frame_count == (_dma_cnt_sub_frames_per_frame-2)) {
-			if ((_dma_state & ILI9486_DMA_CONT) == 0) {
-				if (_dma_sub_frame_count & 1) _dmasettings[0].disableOnCompletion();
-				else _dmasettings[1].disableOnCompletion();
-				//Serial.println("!");
-				_dma_state |= ILI9486_DMA_FINISH;  // let system know we set the finished state
-
-			}
-		}
-		if (_dma_sub_frame_count & 1) {
-			memcpy(_dma_buffer1, &_pfbtft_async[_dma_pixel_index], _dma_buffer_size*2);
-		} else {			
-			memcpy(_dma_buffer2, &_pfbtft_async[_dma_pixel_index], _dma_buffer_size*2);
-		}
-		_dma_pixel_index += _dma_buffer_size;
-		if (_dma_pixel_index >= (_count_pixels))
-			_dma_pixel_index = 0;		// we will wrap around 
-	}
-	_dmatx.clearInterrupt();
-	_dmatx.clearComplete();
 	asm("dsb");
 
-#else
+#elif defined(__MK64FX512__)
+	// 
 	// T3.5...
 	_dmarx.clearInterrupt();
 	_dmatx.clearComplete();
@@ -240,6 +195,8 @@ void ILI9486_t3n::process_dma_interrupt(void) {
 		endSPITransaction();
 		_dma_state &= ~ILI9486_DMA_ACTIVE;
 		_dmaActiveDisplay = 0;	// We don't have a display active any more... 
+		_dma_sub_frame_count = 0;
+		if (_frame_complete_callback) (*_frame_complete_callback)();
 #ifdef DEBUG_ASYNC_LEDS
 		digitalWriteFast(DEBUG_PIN_3, LOW);
 #endif
@@ -247,15 +204,23 @@ void ILI9486_t3n::process_dma_interrupt(void) {
 	} else {
 		uint16_t w;
 		if (_dma_count_remaining) { // Still part of one frome. 
+			bool half_done = _dma_count_remaining == (CBALLOC/4);
 			_dma_count_remaining -= _dma_write_size_words;
 			w = *((uint16_t*)_dmatx.TCD->SADDR);
 			_dmatx.TCD->SADDR = (volatile uint8_t*)(_dmatx.TCD->SADDR) + 2;
+			if (_frame_complete_callback && _frame_callback_on_HalfDone && half_done)  {
+				_dma_sub_frame_count = 1;
+				(*_frame_complete_callback)();
+			}
+			
 		} else {  // start a new frame
 			_dma_frame_count++;
 			_dmatx.sourceBuffer(&_pfbtft[1], (_dma_write_size_words-1)*2);
 			_dmatx.TCD->SLAST = 0;	// Finish with it pointing to next location
 			w = _pfbtft[0];
 			_dma_count_remaining = CBALLOC/2 - _dma_write_size_words;	// how much more to transfer? 
+			_dma_sub_frame_count = 0;
+			if (_frame_complete_callback) (*_frame_complete_callback)();
 		}
 #ifdef DEBUG_ASYNC_UPDATE
 //		dumpDMA_TCD(&_dmatx);
@@ -321,12 +286,27 @@ void ILI9486_t3n::setFrameBuffer(uint16_t *frame_buffer)
 {
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	_pfbtft = frame_buffer;
+	/*  // Maybe you don't want the memory cleared as you may be playing games wiht multiple buffers. 
 	if (_pfbtft != NULL) {
 		memset(_pfbtft, 0, ILI9486_TFTHEIGHT*ILI9486_TFTWIDTH*2);
 	}
+	*/
+	_dma_state &= ~ILI9486_DMA_INIT; // clear that we init the dma chain as our buffer has changed... 
 
 	#endif	
 }
+
+#ifdef ENABLE_ILI9486_FRAMEBUFFER
+void ILI9486_t3n::setFrameCompleteCB(void (*pcb)(), bool fCallAlsoHalfDone)
+{
+	_frame_complete_callback = pcb;
+	_frame_callback_on_HalfDone = pcb ? fCallAlsoHalfDone : false;
+
+	noInterrupts();
+	_dma_state &= ~ILI9486_DMA_INIT; // Lets setup  the call backs on next call out
+	interrupts();
+}
+#endif
 
 uint8_t ILI9486_t3n::useFrameBuffer(boolean b)		// use the frame buffer?  First call will allocate
 {
@@ -343,6 +323,7 @@ uint8_t ILI9486_t3n::useFrameBuffer(boolean b)		// use the frame buffer?  First 
 			memset(_pfbtft, 0, CBALLOC);	
 		}
 		_use_fbtft = 1;
+		clearChangedRange();	// make sure the dirty range is updated.
 	} else 
 		_use_fbtft = 0;
 
@@ -370,7 +351,7 @@ void ILI9486_t3n::updateScreen(void)					// call to say update the screen now.
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
 		beginSPITransaction(_SPI_CLOCK);
-		if (_standard) {
+		if (_standard && !_updateChangedAreasOnly) {
 			// Doing full window. 
 			setAddr(0, 0, _width-1, _height-1);
 			writecommand_cont(ILI9486_RAMWR);
@@ -386,36 +367,54 @@ void ILI9486_t3n::updateScreen(void)					// call to say update the screen now.
 			}
 			writedata16_last(*pftbft);
 		} else {
-			// setup just to output the clip rectangle area. 
-			setAddr(_displayclipx1, _displayclipy1, _displayclipx2-1, _displayclipy2-1);
-			writecommand_cont(ILI9486_RAMWR);
+			// setup just to output the clip rectangle area anded with updated area if enabled
+			int16_t start_x = _displayclipx1;
+			int16_t start_y = _displayclipy1;
+			int16_t end_x = _displayclipx2 - 1; 
+			int16_t end_y = _displayclipy2 - 1;
 
-			// BUGBUG doing as one shot.  Not sure if should or not or do like
-			// main code and break up into transactions...
-			uint16_t * pfbPixel_row = &_pfbtft[ _displayclipy1*_width + _displayclipx1];
-			for (uint16_t y = _displayclipy1; y < _displayclipy2; y++) {
-				uint16_t * pfbPixel = pfbPixel_row;
-				for (uint16_t x = _displayclipx1; x < (_displayclipx2-1); x++) {
-					writedata16_cont(*pfbPixel++);
+			if (_updateChangedAreasOnly) {
+				// maybe update range of values to update...
+	 			if (_changed_min_x > start_x) start_x = _changed_min_x;
+	 			if (_changed_min_y > start_y) start_y = _changed_min_y;
+	 			if (_changed_max_x < end_x) end_x = _changed_max_x;
+	 			if (_changed_max_y < end_y) end_y = _changed_max_y;
+			}
+
+			// Only do if actual area to update
+			if ((start_x <= end_x) && (start_y <= end_y)) {
+				setAddr(start_x, start_y, end_x, end_y);
+				writecommand_cont(ILI9486_RAMWR);
+
+				// BUGBUG doing as one shot.  Not sure if should or not or do like
+				// main code and break up into transactions...
+				uint16_t * pfbPixel_row = &_pfbtft[ start_y*_width + start_x];
+				for (uint16_t y = start_y; y <= end_y; y++) {
+					uint16_t * pfbPixel = pfbPixel_row;
+					for (uint16_t x = start_x; x < end_x; x++) {
+						writedata16_cont(*pfbPixel++);
+					}
+					if (y < (end_y))
+						writedata16_cont(*pfbPixel);
+					else	
+						writedata16_last(*pfbPixel);
+					pfbPixel_row += _width;	// setup for the next row. 
 				}
-				if (y < (_displayclipy2-1))
-					writedata16_cont(*pfbPixel);
-				else	
-					writedata16_last(*pfbPixel);
-				pfbPixel_row += _width;	// setup for the next row. 
 			}
 		}
 		endSPITransaction();
 	}
+	clearChangedRange();	// make sure the dirty range is updated.	
 	#endif
 }			 
 
 #ifdef DEBUG_ASYNC_UPDATE
-void dumpDMA_TCD(DMABaseClass *dmabc)
+void dumpDMA_TCD(DMABaseClass *dmabc, const char *psz_title)
 {
-	Serial4.printf("%x %x:", (uint32_t)dmabc, (uint32_t)dmabc->TCD);
+	if (psz_title) Serial.print(psz_title);
+	Serial.printf("%x %x:", (uint32_t)dmabc, (uint32_t)dmabc->TCD);
 
-	Serial4.printf("SA:%x SO:%d AT:%x NB:%x SL:%d DA:%x DO: %d CI:%x DL:%x CS:%x BI:%x\n", (uint32_t)dmabc->TCD->SADDR,
+	Serial.printf("SA:%x SO:%d AT:%x NB:%x SL:%d DA:%x DO: %d CI:%x DL:%x CS:%x BI:%x\n", (uint32_t)dmabc->TCD->SADDR,
 		dmabc->TCD->SOFF, dmabc->TCD->ATTR, dmabc->TCD->NBYTES, dmabc->TCD->SLAST, (uint32_t)dmabc->TCD->DADDR, 
 		dmabc->TCD->DOFF, dmabc->TCD->CITER, dmabc->TCD->DLASTSGA, dmabc->TCD->CSR, dmabc->TCD->BITER);
 }
@@ -426,7 +425,7 @@ void dumpDMA_TCD(DMABaseClass *dmabc)
 #ifdef ENABLE_ILI9486_FRAMEBUFFER
 void	ILI9486_t3n::initDMASettings(void) 
 {
-	// Serial4.printf("initDMASettings called %d\n", _dma_state);
+	// Serial.printf("initDMASettings called %d\n", _dma_state);
 	if (_dma_state) {  // should test for init, but...
 		return;	// we already init this. 
 	}
@@ -453,6 +452,8 @@ void	ILI9486_t3n::initDMASettings(void)
 	_dmasettings[1].destination(_pkinetisk_spi->PUSHR);
 	_dmasettings[1].TCD->ATTR_DST = 1;
 	_dmasettings[1].replaceSettingsOnCompletion(_dmasettings[2]);
+	if (_frame_callback_on_HalfDone) _dmasettings[1].interruptAtHalf();
+	else  _dmasettings[1].TCD->CSR &= ~DMA_TCD_CSR_INTHALF;
 
 	_dmasettings[2].sourceBuffer(&_pfbtft[COUNT_WORDS_WRITE*2], COUNT_WORDS_WRITE*2);
 	_dmasettings[2].destination(_pkinetisk_spi->PUSHR);
@@ -460,10 +461,13 @@ void	ILI9486_t3n::initDMASettings(void)
 	_dmasettings[2].replaceSettingsOnCompletion(_dmasettings[3]);
 
 	// Sort of hack - but wrap around to output the first word again. 
-	_dmasettings[3].sourceBuffer(_pfbtft, 2);
+	// This version wraps again but instead outputs whole first group, bypass 0... 
+	_dmasettings[2].interruptAtCompletion();  // 2 is end of frame
+
+	_dmasettings[3].sourceBuffer(_pfbtft,  COUNT_WORDS_WRITE*2);
 	_dmasettings[3].destination(_pkinetisk_spi->PUSHR);
 	_dmasettings[3].TCD->ATTR_DST = 1;
-	_dmasettings[3].replaceSettingsOnCompletion(_dmasettings[0]);
+	_dmasettings[3].replaceSettingsOnCompletion(_dmasettings[1]);
 
 	// Setup DMA main object
 	//Serial.println("Setup _dmatx");
@@ -474,26 +478,25 @@ void	ILI9486_t3n::initDMASettings(void)
 #elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
 	// See if moving the frame buffer to other memory that is not cached helps out
 	// to remove tearing and the like...I know with 256 it will be either 256 or 248...
-	_dma_buffer_size = DMA_BUFFER_SIZE;
-	_dma_cnt_sub_frames_per_frame = (_count_pixels) / _dma_buffer_size;
-	while ((_dma_cnt_sub_frames_per_frame * _dma_buffer_size) != (_count_pixels)) {
-		_dma_buffer_size--;
-		_dma_cnt_sub_frames_per_frame = (_count_pixels) / _dma_buffer_size;		
-	}
 
-	Serial.printf("DMA Init buf size: %d sub frames:%d\n", _dma_buffer_size, _dma_cnt_sub_frames_per_frame);
-
-	_dmasettings[0].sourceBuffer(_dma_buffer1, _dma_buffer_size*2);
+	// 320*240/3 = 25600
+	_dmasettings[0].sourceBuffer(_pfbtft, (COUNT_WORDS_WRITE)*2);
 	_dmasettings[0].destination(_pimxrt_spi->TDR);
 	_dmasettings[0].TCD->ATTR_DST = 1;
 	_dmasettings[0].replaceSettingsOnCompletion(_dmasettings[1]);
-	_dmasettings[0].interruptAtCompletion();
 
-	_dmasettings[1].sourceBuffer(_dma_buffer2, _dma_buffer_size*2);
+	_dmasettings[1].sourceBuffer(&_pfbtft[COUNT_WORDS_WRITE], COUNT_WORDS_WRITE*2);
 	_dmasettings[1].destination(_pimxrt_spi->TDR);
 	_dmasettings[1].TCD->ATTR_DST = 1;
-	_dmasettings[1].replaceSettingsOnCompletion(_dmasettings[0]);
-	_dmasettings[1].interruptAtCompletion();
+	_dmasettings[1].replaceSettingsOnCompletion(_dmasettings[2]);
+	if (_frame_callback_on_HalfDone) _dmasettings[1].interruptAtHalf();
+	else  _dmasettings[1].TCD->CSR &= ~DMA_TCD_CSR_INTHALF;
+
+	_dmasettings[2].sourceBuffer(&_pfbtft[COUNT_WORDS_WRITE*2], COUNT_WORDS_WRITE*2);
+	_dmasettings[2].destination(_pimxrt_spi->TDR);
+	_dmasettings[2].TCD->ATTR_DST = 1;
+	_dmasettings[2].replaceSettingsOnCompletion(_dmasettings[0]);
+	_dmasettings[2].interruptAtCompletion();
 
 	// Setup DMA main object
 	//Serial.println("Setup _dmatx");
@@ -504,7 +507,7 @@ void	ILI9486_t3n::initDMASettings(void)
 	if (_spi_num == 0) _dmatx.attachInterrupt(dmaInterrupt);
 	else if (_spi_num == 1) _dmatx.attachInterrupt(dmaInterrupt1);
 	else _dmatx.attachInterrupt(dmaInterrupt2);
-#else
+#elif defined(__MK64FX512__)
 	// T3.5
 	// Lets setup the write size.  For SPI we can use up to 32767 so same size as we use on T3.6...
 	// But SPI1 and SPI2 max of 511.  We will use 480 in that case as even divider...
@@ -525,7 +528,7 @@ void	ILI9486_t3n::initDMASettings(void)
 	_dmatx.destination(_pkinetisk_spi->PUSHR);
 	_dmatx.TCD->ATTR_DST = 1;
 	_dmatx.disableOnCompletion();
-	// Current SPIN, has both RX/TX same for SPI1/2 so just know f
+	// SPI on T3.5 only SPI object can do full size... 
 	if (_spi_num == 0) {
 		_dmatx.triggerAtHardwareEvent(dmaTXevent);
 		_dma_write_size_words = COUNT_WORDS_WRITE;
@@ -537,7 +540,7 @@ void	ILI9486_t3n::initDMASettings(void)
 
 #endif
 	_dma_state = ILI9486_DMA_INIT;  // Should be first thing set!
-	// Serial4.println("DMA initDMASettings - end");
+	// Serial.println("DMA initDMASettings - end");
 
 }
 #endif
@@ -547,17 +550,18 @@ void ILI9486_t3n::dumpDMASettings() {
 #if defined(__MK66FX1M0__) 
 	// T3.6
 	Serial.printf("DMA dump TCDs %d\n", _dmatx.channel);
-	dumpDMA_TCD(&_dmatx);
-	dumpDMA_TCD(&_dmasettings[0]);
-	dumpDMA_TCD(&_dmasettings[1]);
-	dumpDMA_TCD(&_dmasettings[2]);
-	dumpDMA_TCD(&_dmasettings[3]);
+	dumpDMA_TCD(&_dmatx,"TX: ");
+	dumpDMA_TCD(&_dmasettings[0], " 0: ");
+	dumpDMA_TCD(&_dmasettings[1], " 1: ");
+	dumpDMA_TCD(&_dmasettings[2], " 2: ");
+	dumpDMA_TCD(&_dmasettings[3], " 3: ");
 #elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
-	// Serial4.printf("DMA dump TCDs %d\n", _dmatx.channel);
-	dumpDMA_TCD(&_dmatx);
-	dumpDMA_TCD(&_dmasettings[0]);
-	dumpDMA_TCD(&_dmasettings[1]);
-#else
+	// Serial.printf("DMA dump TCDs %d\n", _dmatx.channel);
+	dumpDMA_TCD(&_dmatx,"TX: ");
+	dumpDMA_TCD(&_dmasettings[0], " 0: ");
+	dumpDMA_TCD(&_dmasettings[1], " 1: ");
+	dumpDMA_TCD(&_dmasettings[2], " 2: ");
+#elif defined(__MK64FX512__)
 	Serial.printf("DMA dump TX:%d RX:%d\n", _dmatx.channel, _dmarx.channel);
 	dumpDMA_TCD(&_dmatx);
 	dumpDMA_TCD(&_dmarx);
@@ -609,14 +613,13 @@ bool ILI9486_t3n::updateScreenAsync(bool update_cont)					// call to say update 
 	//==========================================
 	if (update_cont) {
 		// Try to link in #3 into the chain
-		_dmasettings[2].replaceSettingsOnCompletion(_dmasettings[3]);
-		_dmasettings[2].TCD->CSR &= ~(DMA_TCD_CSR_INTMAJOR | DMA_TCD_CSR_DREQ);  // Don't interrupt on this one... 
-		_dmasettings[3].interruptAtCompletion();
-		_dmasettings[3].TCD->CSR &= ~(DMA_TCD_CSR_DREQ);  // Don't disable on this one  
+		//_dmasettings[2].replaceSettingsOnCompletion(_dmasettings[3]);
+		//_dmasettings[2].TCD->CSR &= ~(DMA_TCD_CSR_INTMAJOR | DMA_TCD_CSR_DREQ);  // Don't interrupt on this one... 
+		_dmasettings[2].TCD->CSR &= ~(DMA_TCD_CSR_DREQ);  // Don't disable on this one  
 		_dma_state |= ILI9486_DMA_CONT;
 	} else {
 		// In this case we will only run through once...
-		_dmasettings[2].replaceSettingsOnCompletion(_dmasettings[0]);
+		//_dmasettings[2].replaceSettingsOnCompletion(_dmasettings[0]);
 		_dmasettings[2].interruptAtCompletion();
 		_dmasettings[2].disableOnCompletion();
 		_dma_state &= ~ILI9486_DMA_CONT;
@@ -637,7 +640,7 @@ bool ILI9486_t3n::updateScreenAsync(bool update_cont)					// call to say update 
 	// now lets start up the DMA
 //	volatile uint16_t  biter = _dmatx.TCD->BITER;
 	//DMA_CDNE_CDNE(_dmatx.channel);
-//	_dmatx = _dmasettings[0];
+	_dmatx = _dmasettings[0];
 //	_dmatx.TCD->BITER = biter;
 	_dma_frame_count = 0;  // Set frame count back to zero. 
 	_dmaActiveDisplay = this;
@@ -649,21 +652,13 @@ bool ILI9486_t3n::updateScreenAsync(bool update_cont)					// call to say update 
 	// T4
 	//==========================================
 #elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
+	/////////////////////////////
+	// BUGBUG try first not worry about continueous or not.
   	// Start off remove disable on completion from both...
 	// it will be the ISR that disables it... 
-	_dmasettings[0].TCD->CSR &= ~( DMA_TCD_CSR_DREQ);
-	_dmasettings[1].TCD->CSR &= ~( DMA_TCD_CSR_DREQ);
+	if ((uint32_t)_pfbtft >= 0x20200000u)  arm_dcache_flush(_pfbtft, CBALLOC);
 
-#ifdef DEBUG_ASYNC_UPDATE
-	dumpDMASettings();
-#endif
-	// Lets copy first parts of frame buffer into our two sub-frames
-	_pfbtft_async = _pfbtft;		// remember buffer pointer at start of operation, may allow user to swapp...
-	memcpy(_dma_buffer1, _pfbtft_async, _dma_buffer_size*2);
-	memcpy(_dma_buffer2, &_pfbtft_async[_dma_buffer_size], _dma_buffer_size*2);
-	_dma_pixel_index = _dma_buffer_size*2;
-	_dma_sub_frame_count = 0;	// 
-
+	_dmasettings[2].TCD->CSR &= ~( DMA_TCD_CSR_DREQ);
 	beginSPITransaction(_SPI_CLOCK);
 	// Doing full window. 
 	setAddr(0, 0, _width-1, _height-1);
@@ -672,28 +667,33 @@ bool ILI9486_t3n::updateScreenAsync(bool update_cont)					// call to say update 
 	// Update TCR to 16 bit mode. and output the first entry.
 	_spi_fcr_save = _pimxrt_spi->FCR;	// remember the FCR
 	_pimxrt_spi->FCR = 0;	// clear water marks... 	
-	maybeUpdateTCR(LPSPI_TCR_PCS(1) | LPSPI_TCR_FRAMESZ(15) | LPSPI_TCR_RXMSK /*| LPSPI_TCR_CONT*/);
+	maybeUpdateTCR(_tcr_dc_not_assert | LPSPI_TCR_FRAMESZ(15) | LPSPI_TCR_RXMSK /*| LPSPI_TCR_CONT*/);
  	_pimxrt_spi->DER = LPSPI_DER_TDDE;
 	_pimxrt_spi->SR = 0x3f00;	// clear out all of the other status...
 
-  	_dmatx.triggerAtHardwareEvent( _spi_hardware->tx_dma_channel );
+  	//_dmatx.triggerAtHardwareEvent( _spi_hardware->tx_dma_channel );
 
  	_dmatx = _dmasettings[0];
 
   	_dmatx.begin(false);
   	_dmatx.enable();
 
+
 	_dma_frame_count = 0;  // Set frame count back to zero. 
 	_dmaActiveDisplay[_spi_num]  = this;
 	if (update_cont) {
 		_dma_state |= ILI9486_DMA_CONT;
 	} else {
+		_dmasettings[2].disableOnCompletion();
 		_dma_state &= ~ILI9486_DMA_CONT;
-
 	}
 
 	_dma_state |= ILI9486_DMA_ACTIVE;
-#else
+#ifdef DEBUG_ASYNC_UPDATE
+	dumpDMASettings();
+#endif
+
+#elif defined(__MK64FX512__)
 	//==========================================
 	// T3.5
 	//==========================================
@@ -764,8 +764,8 @@ void ILI9486_t3n::endUpdateAsync() {
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_dma_state & ILI9486_DMA_CONT) {
 		_dma_state &= ~ILI9486_DMA_CONT; // Turn of the continueous mode
-#if defined(__MK66FX1M0__) 
-		_dmasettings[3].disableOnCompletion();
+#if defined(__MK66FX1M0__) || defined(__IMXRT1062__) 
+		_dmasettings[2].disableOnCompletion();
 #endif
 	}
 	#endif
@@ -812,8 +812,8 @@ void ILI9486_t3n::drawPixel(int16_t x, int16_t y, uint16_t color) {
 
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
+		updateChangedRange(x, y);		// update the range of the screen that has been changed;
 		_pfbtft[y*_width + x] = color;
-
 	} else 
 	#endif
 	{
@@ -837,6 +837,7 @@ void ILI9486_t3n::drawFastVLine(int16_t x, int16_t y, int16_t h, uint16_t color)
 
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
+		updateChangedRange(x, y, 1, h);		// update the range of the screen that has been changed;
 		uint16_t * pfbPixel = &_pfbtft[ y*_width + x];
 		while (h--) {
 			*pfbPixel = color;
@@ -869,6 +870,7 @@ void ILI9486_t3n::drawFastHLine(int16_t x, int16_t y, int16_t w, uint16_t color)
 
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
+		updateChangedRange(x, y, w, 1);		// update the range of the screen that has been changed;
 		if ((x&1) || (w&1)) {
 			uint16_t * pfbPixel = &_pfbtft[ y*_width + x];
 			while (w--) {
@@ -902,6 +904,7 @@ void ILI9486_t3n::fillScreen(uint16_t color)
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft && _standard) {
 		// Speed up lifted from Franks DMA code... _standard is if no offsets and rects..
+		updateChangedRange(0, 0, _width, _height);		// update the range of the screen that has been changed;
 		uint32_t color32 = (color << 16) | color;
 
 		uint32_t *pfbPixel = (uint32_t *)_pfbtft;
@@ -940,6 +943,7 @@ void ILI9486_t3n::fillRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t 
 
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
+		updateChangedRange(x, y, w, h);		// update the range of the screen that has been changed;
 		if ((x&1) || (w&1)) {
 			uint16_t * pfbPixel_row = &_pfbtft[ y*_width + x];
 			for (;h>0; h--) {
@@ -1009,6 +1013,7 @@ void ILI9486_t3n::fillRectVGradient(int16_t x, int16_t y, int16_t w, int16_t h, 
 
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
+		updateChangedRange(x, y, w, h);		// update the range of the screen that has been changed;
 		if ((x&1) || (w&1)) {
 			uint16_t * pfbPixel_row = &_pfbtft[ y*_width + x];
 			for (;h>0; h--) {
@@ -1079,6 +1084,7 @@ void ILI9486_t3n::fillRectHGradient(int16_t x, int16_t y, int16_t w, int16_t h, 
 	r=r1;g=g1;b=b1;	
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
+		updateChangedRange(x, y, w, h);		// update the range of the screen that has been changed;
 		uint16_t * pfbPixel_row = &_pfbtft[ y*_width + x];
 		for (;h>0; h--) {
 			uint16_t * pfbPixel = pfbPixel_row;
@@ -1169,7 +1175,13 @@ void ILI9486_t3n::setRotation(uint8_t m)
 	cursor_y = 0;
 }
 
-
+void ILI9486_t3n::setScroll(uint16_t offset)
+{
+	beginSPITransaction(_SPI_CLOCK);
+	writecommand_cont(ILI9486_VSCRSADD);
+	writedata16_last(offset);
+	endSPITransaction();
+}
 
 void ILI9486_t3n::invertDisplay(boolean i)
 {
@@ -1178,10 +1190,459 @@ void ILI9486_t3n::invertDisplay(boolean i)
 	endSPITransaction();
 }
 
+uint8_t ILI9486_t3n::readcommand8(uint8_t c, uint8_t index)
+{
+    // Bail if not valid miso
+    if (_miso == 0xff) return 0;
+
+ #ifdef KINETISK
+    uint16_t wTimeout = 0xffff;
+    uint8_t r=0;
+
+    beginSPITransaction(_SPI_CLOCK);
+	if (_spi_num == 0) {
+		// Only SPI object has larger queue
+	    while (((_pkinetisk_spi->SR) & (15 << 12)) && (--wTimeout)) ; // wait until empty
+
+	    // Make sure the last frame has been sent...
+	    _pkinetisk_spi->SR = SPI_SR_TCF;   // dlear it out;
+	    wTimeout = 0xffff;
+	    while (!((_pkinetisk_spi->SR) & SPI_SR_TCF) && (--wTimeout)) ; // wait until it says the last frame completed
+
+	    // clear out any current received bytes
+	    wTimeout = 0x10;    // should not go more than 4...
+	    while ((((_pkinetisk_spi->SR) >> 4) & 0xf) && (--wTimeout))  {
+	        r = _pkinetisk_spi->POPR;
+	    }
+
+	    //writecommand(0xD9); // sekret command
+		_pkinetisk_spi->PUSHR = 0xD9 | (pcs_command << 16) | SPI_PUSHR_CTAS(0) | SPI_PUSHR_CONT;
+	//	while (((_pkinetisk_spi->SR) & (15 << 12)) > (3 << 12)) ; // wait if FIFO full
+
+	    // writedata(0x10 + index);
+		_pkinetisk_spi->PUSHR = (0x10 + index) | (pcs_data << 16) | SPI_PUSHR_CTAS(0);
+	//	while (((_pkinetisk_spi->SR) & (15 << 12)) > (3 << 12)) ; // wait if FIFO full
+	    // writecommand(c);
+	   	_pkinetisk_spi->PUSHR = c | (pcs_command << 16) | SPI_PUSHR_CTAS(0) | SPI_PUSHR_CONT;
+	//	while (((_pkinetisk_spi->SR) & (15 << 12)) > (3 << 12)) ; // wait if FIFO full
+
+	    // readdata
+		_pkinetisk_spi->PUSHR = 0 | (pcs_data << 16) | SPI_PUSHR_CTAS(0);
+	//	while (((_pkinetisk_spi->SR) & (15 << 12)) > (3 << 12)) ; // wait if FIFO full
+
+	    // Now wait until completed.
+	    wTimeout = 0xffff;
+	    while (((_pkinetisk_spi->SR) & (15 << 12)) && (--wTimeout)) ; // wait until empty
+
+	    // Make sure the last frame has been sent...
+	    _pkinetisk_spi->SR = SPI_SR_TCF;   // dlear it out;
+	    wTimeout = 0xffff;
+	    while (!((_pkinetisk_spi->SR) & SPI_SR_TCF) && (--wTimeout)) ; // wait until it says the last frame completed
+
+	    wTimeout = 0x10;    // should not go more than 4...
+	    // lets get all of the values on the FIFO
+	    while ((((_pkinetisk_spi->SR) >> 4) & 0xf) && (--wTimeout))  {
+	        r = _pkinetisk_spi->POPR;
+	    }
+	} else {
+		while (((_pkinetisk_spi->SR) & (15 << 12)) && (--wTimeout)) ; // wait until empty
+
+	    // Make sure the last frame has been sent...
+	    _pkinetisk_spi->SR = SPI_SR_TCF;   // dlear it out;
+	    wTimeout = 0xffff;
+	    while (!((_pkinetisk_spi->SR) & SPI_SR_TCF) && (--wTimeout)) ; // wait until it says the last frame completed
+
+	    // clear out any current received bytes
+	    wTimeout = 0x10;    // should not go more than 4...
+	    while ((((_pkinetisk_spi->SR) >> 4) & 0xf) && (--wTimeout))  {
+	        r = _pkinetisk_spi->POPR;
+	    }
+
+	    //writecommand(0xD9); // sekret command
+		_pkinetisk_spi->PUSHR = 0xD9 | (pcs_command << 16) | SPI_PUSHR_CTAS(0) | SPI_PUSHR_CONT;
+		while (((_pkinetisk_spi->SR) & (15 << 12)) > (0 << 12)) ; // wait if FIFO full
+
+	    // writedata(0x10 + index);
+		_pkinetisk_spi->PUSHR = (0x10 + index) | (pcs_data << 16) | SPI_PUSHR_CTAS(0);
+		while (((_pkinetisk_spi->SR) & (15 << 12)) > (0 << 12)) ; // wait if FIFO full
+
+		// See if there are any return values to pop 
+	    while (((_pkinetisk_spi->SR) >> 4) & 0xf)  {
+	        r = _pkinetisk_spi->POPR;
+	    }
+
+	    // writecommand(c);
+	   	_pkinetisk_spi->PUSHR = c | (pcs_command << 16) | SPI_PUSHR_CTAS(0) | SPI_PUSHR_CONT;
+		while (((_pkinetisk_spi->SR) & (15 << 12)) > (0 << 12)) ; // wait if FIFO full
+
+		// See if there are any return values to pop 
+	    while (((_pkinetisk_spi->SR) >> 4) & 0xf)  {
+	        r = _pkinetisk_spi->POPR;
+	    }
+
+	    // readdata
+		_pkinetisk_spi->PUSHR = 0 | (pcs_data << 16) | SPI_PUSHR_CTAS(0);
+		while (((_pkinetisk_spi->SR) & (15 << 12)) > (0 << 12)) ; // wait if FIFO full
+
+		// See if there are any return values to pop 
+	    while (((_pkinetisk_spi->SR) >> 4) & 0xf)  {
+	        r = _pkinetisk_spi->POPR;
+	    }
+	    // Now wait until completed.
+	    wTimeout = 0xffff;
+	    while (((_pkinetisk_spi->SR) & (15 << 12)) && (--wTimeout)) ; // wait until empty
+
+	    // Make sure the last frame has been sent...
+	    _pkinetisk_spi->SR = SPI_SR_TCF;   // dlear it out;
+	    wTimeout = 0xffff;
+	    while (!((_pkinetisk_spi->SR) & SPI_SR_TCF) && (--wTimeout)) ; // wait until it says the last frame completed
+
+	    wTimeout = 0x10;    // should not go more than 4...
+	    // lets get all of the values on the FIFO
+	    while ((((_pkinetisk_spi->SR) >> 4) & 0xf) && (--wTimeout))  {
+	        r = _pkinetisk_spi->POPR;
+	    }
+
+	}  
+    endSPITransaction();
+    return r;  // get the received byte... should check for it first...
+#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
+    uint16_t wTimeout = 0xffff;
+    uint8_t r=0;
+
+    beginSPITransaction(_SPI_CLOCK_READ);
+    // Lets assume that queues are empty as we just started transaction.
+	_pimxrt_spi->CR = LPSPI_CR_MEN | LPSPI_CR_RRF /* | LPSPI_CR_RTF */;   // actually clear both...
+    //writecommand(0xD9); // sekret command
+    maybeUpdateTCR(_tcr_dc_assert | LPSPI_TCR_FRAMESZ(7) | LPSPI_TCR_CONT);
+	_pimxrt_spi->TDR = 0xD9;
+
+    // writedata(0x10 + index);
+	maybeUpdateTCR(_tcr_dc_not_assert | LPSPI_TCR_FRAMESZ(7) | LPSPI_TCR_CONT);
+	_pimxrt_spi->TDR = 0x10 + index;
+
+    // writecommand(c);
+    maybeUpdateTCR(_tcr_dc_assert | LPSPI_TCR_FRAMESZ(7) | LPSPI_TCR_CONT);
+	_pimxrt_spi->TDR = c;
+
+    // readdata
+	maybeUpdateTCR(_tcr_dc_not_assert | LPSPI_TCR_FRAMESZ(7));
+	_pimxrt_spi->TDR = 0;
+
+    // Now wait until completed.
+    wTimeout = 0xffff;
+    uint8_t rx_count = 4;
+    while (rx_count && wTimeout) {
+        if ((_pimxrt_spi->RSR & LPSPI_RSR_RXEMPTY) == 0)  {
+            r =_pimxrt_spi->RDR;  // Read any pending RX bytes in
+            rx_count--; //decrement count of bytes still levt
+        }
+    }
+    endSPITransaction();
+    return r;  // get the received byte... should check for it first...
+#else
+	beginSPITransaction(_SPI_CLOCK);
+	writecommand_cont(0xD9);
+	writedata8_cont(0x10 + index);
+
+	writecommand_cont(c);
+	writedata8_cont(0);
+	uint8_t r = waitTransmitCompleteReturnLast();
+	endSPITransaction();
+	return r;
+
+#endif   
+}
+
+// Read Pixel at x,y and get back 16-bit packed color
+#define READ_PIXEL_PUSH_BYTE 0x3f
+uint16_t ILI9486_t3n::readPixel(int16_t x, int16_t y)
+{
+#ifdef KINETISK	
+	//BUGBUG:: Should add some validation of X and Y
+	// Now if we are in buffer mode can return real fast
+	#ifdef ENABLE_ILI9486_FRAMEBUFFER
+	if (_use_fbtft) {
+		x+=_originx;
+		y+=_originy;
+
+		return _pfbtft[y*_width + x] ;
+	}
+	#endif	
+
+   if (_miso == 0xff) return 0xffff;	// bail if not valid miso
+
+	// First pass for other SPI busses use readRect to handle the read... 
+	if (_spi_num != 0) {
+		// Only SPI object has larger queue
+		uint16_t colors;
+		readRect(x, y, 1, 1, &colors);
+		return colors;
+	}
+
+	uint8_t dummy __attribute__((unused));
+	uint8_t r,g,b;
+
+	beginSPITransaction(_SPI_CLOCK_READ);
+
+	// Update our origin. 
+	x+=_originx;
+	y+=_originy;
+
+	setAddr(x, y, x, y);
+	writecommand_cont(ILI9486_RAMRD); // read from RAM
+	waitTransmitComplete();
+
+	// Push 4 bytes over SPI
+	_pkinetisk_spi->PUSHR = 0 | (pcs_data << 16) | SPI_PUSHR_CTAS(0)| SPI_PUSHR_CONT;
+	waitFifoEmpty();    // wait for both queues to be empty.
+
+	_pkinetisk_spi->PUSHR = 0 | (pcs_data << 16) | SPI_PUSHR_CTAS(0)| SPI_PUSHR_CONT;
+	_pkinetisk_spi->PUSHR = 0 | (pcs_data << 16) | SPI_PUSHR_CTAS(0)| SPI_PUSHR_CONT;
+	_pkinetisk_spi->PUSHR = 0 | (pcs_data << 16) | SPI_PUSHR_CTAS(0)| SPI_PUSHR_EOQ;
+
+	// Wait for End of Queue
+	while ((_pkinetisk_spi->SR & SPI_SR_EOQF) == 0) ;
+	_pkinetisk_spi->SR = SPI_SR_EOQF;  // make sure it is clear
+
+	// Read Pixel Data
+	dummy = _pkinetisk_spi->POPR;	// Read a DUMMY byte of GRAM
+	r = _pkinetisk_spi->POPR;		// Read a RED byte of GRAM
+	g = _pkinetisk_spi->POPR;		// Read a GREEN byte of GRAM
+	b = _pkinetisk_spi->POPR;		// Read a BLUE byte of GRAM
+
+	endSPITransaction();
+	return color565(r,g,b);
+#else
+	// Kinetisk
+	uint16_t colors = 0;
+	readRect(x, y, 1, 1, &colors);
+	return colors;
+#endif	
+}
+
+// Now lets see if we can read in multiple pixels
+#ifdef KINETISK
+void ILI9486_t3n::readRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t *pcolors)
+{
+	// Use our Origin. 
+	x+=_originx;
+	y+=_originy;
+	//BUGBUG:: Should add some validation of X and Y
+
+	#ifdef ENABLE_ILI9486_FRAMEBUFFER
+	if (_use_fbtft) {
+		uint16_t * pfbPixel_row = &_pfbtft[ y*_width + x];
+		for (;h>0; h--) {
+			uint16_t * pfbPixel = pfbPixel_row;
+			for (int i = 0 ;i < w; i++) {
+				*pcolors++ = *pfbPixel++;
+			}
+			pfbPixel_row += _width;
+		}
+		return;	
+	}
+	#endif	
+
+   if (_miso == 0xff) return;		// bail if not valid miso
+
+	uint8_t rgb[3];               // RGB bytes received from the display
+	uint8_t rgbIdx = 0;
+	uint32_t txCount = w * h * 3; // number of bytes we will transmit to the display
+	uint32_t rxCount = txCount;   // number of bytes we will receive back from the display
+
+	beginSPITransaction(_SPI_CLOCK_READ);
+
+	setAddr(x, y, x+w-1, y+h-1);
+	writecommand_cont(ILI9486_RAMRD); // read from RAM
+
+	// transmit a DUMMY byte before the color bytes
+	_pkinetisk_spi->PUSHR = 0 | (pcs_data << 16) | SPI_PUSHR_CTAS(0)| SPI_PUSHR_CONT;
+
+	// skip values returned by the queued up transfers and the current in-flight transfer
+	uint32_t sr = _pkinetisk_spi->SR;
+	uint8_t skipCount = ((sr >> 4) & 0xF) + ((sr >> 12) & 0xF) + 1;
+
+	while (txCount || rxCount) {
+		// transmit another byte if possible
+		if (txCount && (_pkinetisk_spi->SR & 0xF000) <= _fifo_full_test) {
+			txCount--;
+			if (txCount) {
+				_pkinetisk_spi->PUSHR = READ_PIXEL_PUSH_BYTE | (pcs_data << 16) | SPI_PUSHR_CTAS(0)| SPI_PUSHR_CONT;
+			} else {
+				_pkinetisk_spi->PUSHR = READ_PIXEL_PUSH_BYTE | (pcs_data << 16) | SPI_PUSHR_CTAS(0)| SPI_PUSHR_EOQ;
+			}
+		}
+
+		// receive another byte if possible, and either skip it or store the color
+		if (rxCount && (_pkinetisk_spi->SR & 0xF0)) {
+			rgb[rgbIdx] = _pkinetisk_spi->POPR;
+
+			if (skipCount) {
+				skipCount--;
+			} else {
+				rxCount--;
+				rgbIdx++;
+				if (rgbIdx == 3) {
+					rgbIdx = 0;
+					*pcolors++ = color565(rgb[0], rgb[1], rgb[2]);
+				}
+			}
+		}
+	}
+
+	// wait for End of Queue
+	while ((_pkinetisk_spi->SR & SPI_SR_EOQF) == 0) ;
+	_pkinetisk_spi->SR = SPI_SR_EOQF;  // make sure it is clear
+	endSPITransaction();
+
+}
+#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
+void ILI9486_t3n::readRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t *pcolors)
+{
+	// Use our Origin. 
+	x+=_originx;
+	y+=_originy;
+	//BUGBUG:: Should add some validation of X and Y
+
+	#ifdef ENABLE_ILI9486_FRAMEBUFFER
+	if (_use_fbtft) {
+		uint16_t * pfbPixel_row = &_pfbtft[ y*_width + x];
+		for (;h>0; h--) {
+			uint16_t * pfbPixel = pfbPixel_row;
+			for (int i = 0 ;i < w; i++) {
+				*pcolors++ = *pfbPixel++;
+			}
+			pfbPixel_row += _width;
+		}
+		return;	
+	}
+	#endif	
+
+   if (_miso == 0xff) return;		// bail if not valid miso
+
+	uint8_t rgb[3];               // RGB bytes received from the display
+	uint8_t rgbIdx = 0;
+	uint32_t txCount = w * h * 3; // number of bytes we will transmit to the display
+	uint32_t rxCount = txCount;   // number of bytes we will receive back from the display
+
+	beginSPITransaction(_SPI_CLOCK_READ);
+
+	setAddr(x, y, x+w-1, y+h-1);
+	writecommand_cont(ILI9486_RAMRD); // read from RAM
+
+
+	// transmit a DUMMY byte before the color bytes
+	writedata8_last(0);		// BUGBUG:: maybe fix this as this will wait until the byte fully transfers through.
+
+	while (txCount || rxCount) {
+		// transmit another byte if possible
+		if (txCount && (_pimxrt_spi->SR & LPSPI_SR_TDF)) {
+			txCount--;
+			if (txCount) {
+				_pimxrt_spi->TDR = 0;
+			} else {
+				maybeUpdateTCR(_tcr_dc_not_assert | LPSPI_TCR_FRAMESZ(7)); // remove the CONTINUE...
+				while ((_pimxrt_spi->SR & LPSPI_SR_TDF) == 0) ;		// wait if queue was full
+				_pimxrt_spi->TDR = 0;
+			}
+		}
+
+		// receive another byte if possible, and either skip it or store the color
+		if (rxCount && !(_pimxrt_spi->RSR & LPSPI_RSR_RXEMPTY)) {
+			rgb[rgbIdx] = _pimxrt_spi->RDR;
+
+			rxCount--;
+			rgbIdx++;
+			if (rgbIdx == 3) {
+				rgbIdx = 0;
+				*pcolors++ = color565(rgb[0], rgb[1], rgb[2]);
+			}
+		}
+	}
+
+	// We should have received everything so should be done
+	endSPITransaction();
+}
+
+#else
+
+// Teensy LC version
+void ILI9486_t3n::readRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t *pcolors)
+{
+	// Use our Origin. 
+	x+=_originx;
+	y+=_originy;
+	//BUGBUG:: Should add some validation of X and Y
+
+   if (_miso == 0xff) return;		// bail if not valid miso
+
+	uint8_t rgb[3];               // RGB bytes received from the display
+	uint8_t rgbIdx = 0;
+	uint32_t txCount = w * h * 3; // number of bytes we will transmit to the display
+	uint32_t rxCount = txCount;   // number of bytes we will receive back from the display
+
+	beginSPITransaction(_SPI_CLOCK_READ);
+
+	setAddr(x, y, x+w-1, y+h-1);
+	writecommand_cont(ILI9486_RAMRD); // read from RAM
+
+	// transmit a DUMMY byte before the color bytes
+	writedata8_cont(0);
+
+	// Wait until that one returns, Could do a little better and double buffer but this is easer for now.
+	waitTransmitComplete();
+
+	// Since double buffer setup lets try keeping read/write in sync
+#define RRECT_TIMEOUT 0xffff	
+#undef 	READ_PIXEL_PUSH_BYTE
+#define READ_PIXEL_PUSH_BYTE 0 // try with zero to see... 	
+	uint16_t timeout_countdown = RRECT_TIMEOUT;
+	uint16_t dl_in;
+	// Write out first byte:
+
+	while (!(_pkinetisl_spi->S & SPI_S_SPTEF)) ; // Not worried that this can completely hang?
+	_pkinetisl_spi->DL = READ_PIXEL_PUSH_BYTE;
+
+	while (rxCount && timeout_countdown) {
+		// Now wait until we can output something
+		dl_in = 0xffff;
+		if (rxCount > 1) {
+			while (!(_pkinetisl_spi->S & SPI_S_SPTEF)) ; // Not worried that this can completely hang?
+			if (_pkinetisl_spi->S & SPI_S_SPRF)
+				dl_in = _pkinetisl_spi->DL;  
+			_pkinetisl_spi->DL = READ_PIXEL_PUSH_BYTE;
+		}
+
+		// Now wait until there is a byte available to receive
+		while ((dl_in != 0xffff) && !(_pkinetisl_spi->S & SPI_S_SPRF) && --timeout_countdown) ;
+		if (timeout_countdown) {   // Make sure we did not get here because of timeout 
+			rxCount--;
+			rgb[rgbIdx] = (dl_in != 0xffff)? dl_in : _pkinetisl_spi->DL;
+			rgbIdx++;
+			if (rgbIdx == 3) {
+				rgbIdx = 0;
+				*pcolors++ = color565(rgb[0], rgb[1], rgb[2]);
+			}
+			timeout_countdown = timeout_countdown;
+		}
+	}
+
+	// Debug code. 
+/*	if (timeout_countdown == 0) {
+		Serial.print("RRect Timeout ");
+		Serial.println(rxCount, DEC);
+	} */
+	endSPITransaction();
+}
+#endif		
+
 // Now lets see if we can writemultiple pixels
 void ILI9486_t3n::writeRect(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pcolors)
 {
 
+	if (x == CENTER) x = (_width - w) / 2;
+	if (y == CENTER) y = (_height - h) / 2;
 	x+=_originx;
 	y+=_originy;
 	uint16_t x_clip_left = 0;  // How many entries at start of colors to skip at start of row
@@ -1218,6 +1679,7 @@ void ILI9486_t3n::writeRect(int16_t x, int16_t y, int16_t w, int16_t h, const ui
 
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
+		updateChangedRange(x, y, w, h);		// update the range of the screen that has been changed;
 		uint16_t * pfbPixel_row = &_pfbtft[ y*_width + x];
 		for (;h>0; h--) {
 			uint16_t * pfbPixel = pfbPixel_row;
@@ -1290,6 +1752,7 @@ void ILI9486_t3n::writeRect8BPP(int16_t x, int16_t y, int16_t w, int16_t h, cons
 	//Serial.printf("WR8C: %d %d %d %d %x- %d %d\n", x, y, w, h, (uint32_t)pixels, x_clip_right, x_clip_left);
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
+		updateChangedRange(x, y, w, h);		// update the range of the screen that has been changed;
 		uint16_t * pfbPixel_row = &_pfbtft[ y*_width + x];
 		for (;h>0; h--) {
 			pixels += x_clip_left;
@@ -1353,19 +1816,7 @@ void ILI9486_t3n::writeRect1BPP(int16_t x, int16_t y, int16_t w, int16_t h, cons
 	writeRectNBPP(x, y, w, h,  1, pixels, palette );
 }
 
-static const uint8_t init_commands[] = {
-	2, 0x3A, 0x55, 			// Interface Pixel Format (16Bit)
-	3, 0xB1, 0x80, 0x10, 	// FrameRate Control
-	2, 0xB4, 0x02, 			// Display Z Inversion
-	3, 0xC0, 0x0E, 0x0E, 	// Power Control 1
-	2, 0xC1, 0x50, 			// Power Control 2 
-	3, 0xC5, 0x00, 0x60,  // VCOM Control
-	16, 0xE0, 0xF0, 0x09, 0x13, 0x12, 0x12, 0x2B, 0x3C, 0x44, 0x4B, 0x1B, 0x18, 0x17, 0x1D, 0x21, 0x00,
-	16, 0xE1, 0xF0, 0x09, 0x13, 0x0C, 0x0D, 0x27, 0x3B, 0x44, 0x4D, 0x0B, 0x17, 0x17, 0x1D, 0x21, 0x00,
-	3, 0xB6, 0x00, 0x00, 	// Display Function Control
-	2, 0x36, 0x08, 			// Memory Access Control
-	0
-};
+
 
 ///============================================================================
 // writeRectNBPP - 	write N(1, 2, 4, 8) bit per pixel paletted bitmap
@@ -1419,6 +1870,7 @@ void ILI9486_t3n::writeRectNBPP(int16_t x, int16_t y, int16_t w, int16_t h,  uin
 
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	if (_use_fbtft) {
+		updateChangedRange(x, y, w, h);		// update the range of the screen that has been changed;
 		uint16_t * pfbPixel_row = &_pfbtft[ y*_width + x];
 		for (;h>0; h--) {
 			uint16_t * pfbPixel = pfbPixel_row;
@@ -1464,34 +1916,71 @@ void ILI9486_t3n::writeRectNBPP(int16_t x, int16_t y, int16_t w, int16_t h,  uin
 	endSPITransaction();
 }
 
-void ILI9486_t3n::begin(uint32_t spi_clock, uint32_t spi_clock_read)
+static const uint8_t init_commands[] = {
+	2, 0x3A, 0x55, 			// Interface Pixel Format (16Bit)
+	3, 0xB1, 0x80, 0x10, 	// FrameRate Control 		
+	2, 0xB4, 0x02, 			// Display Z Inversion
+	3, 0xC0, 0x17, 0x17, 	// Power Control 1 			
+	2, 0xC1, 0x50, 			// Power Control 2 			
+	3, 0xC5, 0x00, 0x60,  // VCOM Control 
+	16, 0xE0, 0xF0, 0x09, 0x13, 0x12, 0x12, 0x2B, 0x3C, 0x44, 0x4B, 0x1B, 0x18, 0x17, 0x1D, 0x21, 0x00,
+	16, 0xE1, 0xF0, 0x09, 0x13, 0x0C, 0x0D, 0x27, 0x3B, 0x44, 0x4D, 0x0B, 0x17, 0x17, 0x1D, 0x21, 0x00,
+	3, 0xB6, 0x00, 0x00, 	// Display Function Control
+	2, 0x36, 0x08, 			// Memory Access Control
+	0
+};
+
+FLASHMEM void ILI9486_t3n::begin(uint32_t spi_clock, uint32_t spi_clock_read)  
 {
     // verify SPI pins are valid;
 	// allow user to say use current ones...
 	_SPI_CLOCK = spi_clock;				// #define ILI9486_SPICLOCK 30000000
 	_SPI_CLOCK_READ = spi_clock_read; 	//#define ILI9486_SPICLOCK_READ 2000000
 
-	Serial.printf("_t3n::begin mosi:%d miso:%d SCLK:%d CS:%d DC:%d SPI clocks: %lu %lu\n", _mosi, _miso, _sclk, _cs, _dc, _SPI_CLOCK, _SPI_CLOCK_READ); Serial.flush();
+	//Serial.printf("_t3n::begin mosi:%d miso:%d SCLK:%d CS:%d DC:%d SPI clocks: %lu %lu\n", _mosi, _miso, _sclk, _cs, _dc, _SPI_CLOCK, _SPI_CLOCK_READ); Serial.flush();
 
 	if (SPI.pinIsMOSI(_mosi) && ((_miso == 0xff) || SPI.pinIsMISO(_miso)) && SPI.pinIsSCK(_sclk)) {
 		_pspi = &SPI;
 		_spi_num = 0;          // Which buss is this spi on? 
+		#ifdef KINETISK
+		_pkinetisk_spi = &KINETISK_SPI0;  // Could hack our way to grab this from SPI object, but...
+		_fifo_full_test = (3 << 12);
+		#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
 		_pimxrt_spi = &IMXRT_LPSPI4_S;  // Could hack our way to grab this from SPI object, but...
+		#else
+		_pkinetisl_spi = &KINETISL_SPI0;
+		#endif				
 	
+	#if defined(__MK64FX512__) || defined(__MK66FX1M0__) || defined(__IMXRT1062__) || defined(__MKL26Z64__)
 	} else if (SPI1.pinIsMOSI(_mosi) && ((_miso == 0xff) || SPI1.pinIsMISO(_miso)) && SPI1.pinIsSCK(_sclk)) {
 		_pspi = &SPI1;
 		_spi_num = 1;          // Which buss is this spi on? 
+		#ifdef KINETISK
+		_pkinetisk_spi = &KINETISK_SPI1;  // Could hack our way to grab this from SPI object, but...
+		_fifo_full_test = (0 << 12);
+		#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
 		_pimxrt_spi = &IMXRT_LPSPI3_S;  // Could hack our way to grab this from SPI object, but...
-						
+		#else
+		_pkinetisl_spi = &KINETISL_SPI1;
+		#endif				
+	#if !defined(__MKL26Z64__)
 	} else if (SPI2.pinIsMOSI(_mosi) && ((_miso == 0xff) || SPI2.pinIsMISO(_miso)) && SPI2.pinIsSCK(_sclk)) {
 		_pspi = &SPI2;
 		_spi_num = 2;          // Which buss is this spi on? 
+		#ifdef KINETISK
+		_pkinetisk_spi = &KINETISK_SPI2;  // Could hack our way to grab this from SPI object, but...
+		_fifo_full_test = (0 << 12);
+		#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
 		_pimxrt_spi = &IMXRT_LPSPI1_S;  // Could hack our way to grab this from SPI object, but...
+		#endif				
+	#endif
+	#endif
 	} else {
 		Serial.println("ILI9486_t3n: The IO pins on the constructor are not valid SPI pins");
 	
 		Serial.printf("    mosi:%d miso:%d SCLK:%d CS:%d DC:%d\n", _mosi, _miso, _sclk, _cs, _dc); Serial.flush();
 		return;  // most likely will go bomb
+
 	}
 	// Make sure we have all of the proper SPI pins selected.
 	_pspi->setMOSI(_mosi);
@@ -1524,7 +2013,7 @@ void ILI9486_t3n::begin(uint32_t spi_clock, uint32_t spi_clock_read)
 		}
 	}
 #elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
-	Serial.println("   T4 setup CS/DC"); Serial.flush();
+	// Serial.println("   T4 setup CS/DC"); Serial.flush();
 	_csport = portOutputRegister(_cs);
 	_cspinmask = digitalPinToBitMask(_cs);
 	pinMode(_cs, OUTPUT);	
@@ -1533,17 +2022,25 @@ void ILI9486_t3n::begin(uint32_t spi_clock, uint32_t spi_clock_read)
 
 	// TODO:  Need to setup DC to actually work.
 	if (_pspi->pinIsChipSelect(_dc)) {
-	 	_pspi->setCS(_dc);
+	 	uint8_t dc_cs_index = _pspi->setCS(_dc);
+	 	// Serial.printf("    T4 hardware DC: %x\n", dc_cs_index);
 	 	_dcport = 0;
 	 	_dcpinmask = 0;
+	 	// will depend on which PCS but first get this to work...
+	 	dc_cs_index--;	// convert to 0 based
+		_tcr_dc_assert = LPSPI_TCR_PCS(dc_cs_index);
+    	_tcr_dc_not_assert = LPSPI_TCR_PCS(3);
 	} else {
-		//Serial.println("ILI9486_t3n: Error not DC is not valid hardware CS pin");
+		//Serial.println("ILI9486_t3n: DC is not valid hardware CS pin");
 		_dcport = portOutputRegister(_dc);
 		_dcpinmask = digitalPinToBitMask(_dc);
 		pinMode(_dc, OUTPUT);	
 		DIRECT_WRITE_HIGH(_dcport, _dcpinmask);
+		_tcr_dc_assert = LPSPI_TCR_PCS(0);
+    	_tcr_dc_not_assert = LPSPI_TCR_PCS(1);
+
 	}
-	maybeUpdateTCR(LPSPI_TCR_PCS(1) | LPSPI_TCR_FRAMESZ(7));
+	maybeUpdateTCR(_tcr_dc_not_assert | LPSPI_TCR_FRAMESZ(7));
 
 #else
 	// TLC
@@ -1559,9 +2056,7 @@ void ILI9486_t3n::begin(uint32_t spi_clock, uint32_t spi_clock_read)
 	*_dcport |= _dcpinmask;
 	_dcpinAsserted = 0;
 #endif	
-	//------------------------------------------------------------------------------------------------------------------------------
-	//----------------------------------------------------- Display Init -----------------------------------------------------------
-	//------------------------------------------------------------------------------------------------------------------------------
+
 	// toggle RST low to reset
 	if (_rst < 255) {
 		pinMode(_rst, OUTPUT);
@@ -1570,9 +2065,9 @@ void ILI9486_t3n::begin(uint32_t spi_clock, uint32_t spi_clock_read)
 		digitalWrite(_rst, LOW);
 		delay(30);
 		digitalWrite(_rst, HIGH);
-		delay(75);
+		delay(150);
 	}
-	
+
 	beginSPITransaction(_SPI_CLOCK);
 	writecommand_cont(0x11);    // Exit Sleep
 	delay(10);
@@ -1586,14 +2081,13 @@ void ILI9486_t3n::begin(uint32_t spi_clock, uint32_t spi_clock_read)
 			writedata8_cont(*addr++);
 		}
 	}
-	
-	writecommand_last(0x11);    // Exit Sleep
+	writecommand_last(ILI9486_SLPOUT);    // Exit Sleep
 	endSPITransaction();
-	delay(10);
+	delay(10); 	
 	
 	beginSPITransaction(_SPI_CLOCK);
 	writecommand_cont(0x13);		//normal mode
-	writecommand_last(0x29);		// Display ON
+	writecommand_last(ILI9486_DISPON);    // Display on
 	endSPITransaction();
 
 #ifdef DEBUG_ASYNC_LEDS
@@ -1601,9 +2095,41 @@ void ILI9486_t3n::begin(uint32_t spi_clock, uint32_t spi_clock_read)
 	pinMode(DEBUG_PIN_2, OUTPUT);
 	pinMode(DEBUG_PIN_3, OUTPUT);
 #endif
-	Serial.println("_t3n::begin - completed"); Serial.flush();
+	//Serial.println("_t3n::begin - completed"); Serial.flush();
 }
 
+/*
+This is the core graphics library for all our displays, providing a common
+set of graphics primitives (points, lines, circles, etc.).  It needs to be
+paired with a hardware-specific library for each display device we carry
+(to handle the lower-level functions).
+
+Adafruit invests time and resources providing this open source code, please
+support Adafruit & open-source hardware by purchasing products from Adafruit!
+
+Copyright (c) 2013 Adafruit Industries.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+- Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+*/
 
 //#include "glcdfont.c"
 extern "C" const unsigned char glcdfont[];
@@ -1718,8 +2244,7 @@ void ILI9486_t3n::fillCircleHelper(int16_t x0, int16_t y0, int16_t r,
 
 // Bresenham's algorithm - thx wikpedia
 void ILI9486_t3n::drawLine(int16_t x0, int16_t y0,
-	int16_t x1, int16_t y1, uint16_t color)
-{
+	int16_t x1, int16_t y1, uint16_t color){
 	if (y0 == y1) {
 		if (x1 > x0) {
 			drawFastHLine(x0, y0, x1 - x0 + 1, color);
@@ -1740,12 +2265,12 @@ void ILI9486_t3n::drawLine(int16_t x0, int16_t y0,
 
 	bool steep = abs(y1 - y0) > abs(x1 - x0);
 	if (steep) {
-		swapp(x0, y0);
-		swapp(x1, y1);
+		ILI9486_swap(x0, y0);
+		ILI9486_swap(x1, y1);
 	}
 	if (x0 > x1) {
-		swapp(x0, x1);
-		swapp(y0, y1);
+		ILI9486_swap(x0, x1);
+		ILI9486_swap(y0, y1);
 	}
 
 	int16_t dx, dy;
@@ -1882,13 +2407,13 @@ void ILI9486_t3n::fillTriangle ( int16_t x0, int16_t y0,
 
   // Sort coordinates by Y order (y2 >= y1 >= y0)
   if (y0 > y1) {
-    swapp(y0, y1); swapp(x0, x1);
+    ILI9486_swap(y0, y1); ILI9486_swap(x0, x1);
   }
   if (y1 > y2) {
-    swapp(y2, y1); swapp(x2, x1);
+    ILI9486_swap(y2, y1); ILI9486_swap(x2, x1);
   }
   if (y0 > y1) {
-    swapp(y0, y1); swapp(x0, x1);
+    ILI9486_swap(y0, y1); ILI9486_swap(x0, x1);
   }
 
   if(y0 == y2) { // Handle awkward all-on-same-line case as its own thing
@@ -1929,7 +2454,7 @@ void ILI9486_t3n::fillTriangle ( int16_t x0, int16_t y0,
     a = x0 + (x1 - x0) * (y - y0) / (y1 - y0);
     b = x0 + (x2 - x0) * (y - y0) / (y2 - y0);
     */
-    if(a > b) swapp(a,b);
+    if(a > b) ILI9486_swap(a,b);
     drawFastHLine(a, y, b-a+1, color);
   }
 
@@ -1946,7 +2471,7 @@ void ILI9486_t3n::fillTriangle ( int16_t x0, int16_t y0,
     a = x1 + (x2 - x1) * (y - y1) / (y2 - y1);
     b = x0 + (x2 - x0) * (y - y0) / (y2 - y0);
     */
-    if(a > b) swapp(a,b);
+    if(a > b) ILI9486_swap(a,b);
     drawFastHLine(a, y, b-a+1, color);
   }
 }
@@ -1960,7 +2485,7 @@ void ILI9486_t3n::drawBitmap(int16_t x, int16_t y,
   for(j=0; j<h; j++) {
     for(i=0; i<w; i++ ) {
       if(pgm_read_byte(bitmap + j * byteWidth + i / 8) & (128 >> (i & 7))) {
-	drawPixel(x+i, y+j, color);
+		drawPixel(x+i, y+j, color);
       }
     }
   }
@@ -1981,11 +2506,15 @@ void ILI9486_t3n::drawTransparentBgPicRotated(int x, int y, int w, int h,
 
     //calc y position
     if (c == _w) { //line fully processed
-      _w = _w + w; //setup _w for next line
+      _w += w; //setup _w for next line
       cc++; //count up y position / line count
     }
 
     //get pivot points
+	//c = aktuelle Pixelnummer
+	//_w = aktuelles Line-Ende
+	//cc = aktuelle y position
+	
     actualX = c - _w + w - centerX+1; //get pivot point for x
     actualY = cc - centerY+1; //get pivot point for y
 
@@ -2009,6 +2538,40 @@ void ILI9486_t3n::drawTransparentBgPicRotated(int x, int y, int w, int h,
   }
 }
 
+void ILI9486_t3n::drawValRing(int x, int y, int w, int h, const uint16_t* pic, int Angle) {
+	int cc = 0; //line-counter
+	int _w = w; //actual line end
+	int actualX, actualY;
+	
+	//Rotationsmittelpunkt
+	int rotCenterX = w/2;
+	int rotCenterY = h;
+	float radius = h;
+	
+	fillPie(rotCenterX, rotCenterY, radius, 0, Angle);
+
+	// //process every single pixel
+	for (int c = 0; c < w * h; c++) {
+		//calc y position
+		if (c == _w) { //line fully processed
+			_w += w; //setup _w for next line
+			cc++; //count up y position / line count
+		}
+
+		//get x and y positions
+		actualX = c - _w + w;
+		actualY = cc;
+
+		//draw pixels
+		if (pic[c] != 0) {
+		    //draw normal single pixel on calculated position if we are in pie bounds
+		    if(checkPieBounds(actualX, actualY)){
+		       drawPixel(actualX + x, actualY + y, pic[c]);
+		    }
+		}
+	}
+}
+
 // brightness = 255 is normal (no change)
 // brightness > 255 is lightened
 // brightness < 255 is darkened
@@ -2019,6 +2582,12 @@ void ILI9486_t3n::drawPicBrightness(int x, int y, int w, int h, const uint16_t* 
   uint16_t thePixel;
   uint8_t r, g, b;
   
+  #ifdef ENABLE_ILI9486_FRAMEBUFFER
+	if (_use_fbtft) {
+		updateChangedRange(x, y, w, h);		// update the range of the screen that has been changed;
+	}
+	#endif
+	
   //process every single pixel
   for (int c = 0; c < w * h; c++) {
 
@@ -2063,9 +2632,15 @@ void ILI9486_t3n::fadeInScreen(int factor){
   uint16_t thePixel;
   uint8_t r, g, b;
   
+  #ifdef ENABLE_ILI9486_FRAMEBUFFER
+	if (_use_fbtft) {
+		updateChangedRange(0, 0, 480, 320);		// update the range of the screen that has been changed;
+	}
+	#endif
+	
   for (int brightness = 0; brightness<255; brightness+=factor){
 	  //process every single pixel
-	  for (int c = 0; c < 76800; c++) {
+	  for (int c = 0; c < 153600; c++) {
 		//calc brightness
 		thePixel = _pfbtft[c];
 		
@@ -2091,7 +2666,6 @@ void ILI9486_t3n::fadeInScreen(int factor){
   }
 	
 }
-
 // overwrite functions from class Print:
 
 size_t ILI9486_t3n::write(uint8_t c) {
@@ -2125,30 +2699,48 @@ size_t ILI9486_t3n::write(const uint8_t *buffer, size_t size)
 		if (font) {
 			if (c == '\n') {
 				cursor_y += font->line_space;
-				cursor_x  = 0;
-				
+				if(scrollEnable && isWritingScrollArea){
+					cursor_x  = scroll_x;
+				}else{
+					cursor_x  = 0;
+				}
 			} else {
 				drawFontChar(c);
 			}
 		} else if (gfxFont)  {
 			if (c == '\n') {
 	            cursor_y += (int16_t)textsize_y * gfxFont->yAdvance;
-				cursor_x  = 0;
-				
+				if(scrollEnable && isWritingScrollArea){
+					cursor_x  = scroll_x;
+				}else{
+					cursor_x  = 0;
+				}
 			} else {
 				drawGFXFontChar(c);
 			}
 		} else {
 			if (c == '\n') {
 				cursor_y += textsize_y*8;
-				cursor_x  = 0;
-				
+				if(scrollEnable && isWritingScrollArea){
+					cursor_x  = scroll_x;
+				}else{
+					cursor_x  = 0;
+				}
 			} else if (c == '\r') {
 				// skip em
 			} else {
+				if(scrollEnable && isWritingScrollArea && (cursor_y > (scroll_y+scroll_height - textsize_y*8))){
+					scrollTextArea(textsize_y*8);
+					cursor_y -= textsize_y*8;
+					cursor_x = scroll_x;
+				}
 				drawChar(cursor_x, cursor_y, c, textcolor, textbgcolor, textsize_x, textsize_y);
 				cursor_x += textsize_x*6;
-				if (wrap && (cursor_x > (_width - textsize_x*6))) {
+				if(wrap && scrollEnable && isWritingScrollArea && (cursor_x > (scroll_x+scroll_width - textsize_x*6))){
+					cursor_y += textsize_y*8;
+					cursor_x = scroll_x;
+				}
+				else if (wrap && (cursor_x > (_width - textsize_x*6))) {
 					cursor_y += textsize_y*6;
 					cursor_x = 0;
 				}
@@ -2272,7 +2864,7 @@ void ILI9486_t3n::drawChar(int16_t x, int16_t y, unsigned char c,
 
 		#ifdef ENABLE_ILI9486_FRAMEBUFFER
 		if (_use_fbtft) {
-
+			updateChangedRange(x, y, 6 * size_x , 8 * size_y);		// update the range of the screen that has been changed;
 			uint16_t * pfbPixel_row = &_pfbtft[ y*_width + x];
 			for (yc=0; (yc < 8) && (y < _displayclipy2); yc++) {
 				for (yr=0; (yr < size_y) && (y < _displayclipy2); yr++) {
@@ -2549,9 +3141,21 @@ void ILI9486_t3n::drawFontChar(unsigned int c)
 		}
 		cursor_y += font->line_space;
 	}
+	if(wrap && scrollEnable && isWritingScrollArea && ((origin_x + (int)width) > (scroll_x+scroll_width))){
+    	origin_x = 0;
+		if (xoffset >= 0) {
+			cursor_x = scroll_x;
+		} else {
+			cursor_x = -xoffset;
+		}
+		cursor_y += font->line_space;
+    }
 	
-	
-	
+	if(scrollEnable && isWritingScrollArea && (cursor_y > (scroll_y+scroll_height - font->cap_height))){
+		scrollTextArea(font->line_space);
+		cursor_y -= font->line_space;
+		cursor_x = scroll_x;
+	} 
 	if (cursor_y >= _height) return;
 
 	// vertically, the top and/or bottom can be clipped
@@ -2674,6 +3278,8 @@ void ILI9486_t3n::drawFontChar(unsigned int c)
 */
 		#ifdef ENABLE_ILI9486_FRAMEBUFFER
 		if (_use_fbtft) {
+			updateChangedRange(start_x, start_y);		// update the range of the screen that has been changed;
+			updateChangedRange(end_x, end_y);		// update the range of the screen that has been changed;
 			uint16_t * pfbPixel_row = &_pfbtft[ start_y*_width + start_x];
 			uint16_t * pfbPixel;
 			int screen_y = start_y;
@@ -3399,6 +4005,8 @@ void ILI9486_t3n::drawGFXFontChar(unsigned int c) {
 		#ifdef ENABLE_ILI9486_FRAMEBUFFER
 		if (_use_fbtft) {
 			// lets try to output the values directly...
+			updateChangedRange(x_start, y_start);		// update the range of the screen that has been changed;
+			updateChangedRange(x_end, y_end);		// update the range of the screen that has been changed;
 			uint16_t * pfbPixel_row = &_pfbtft[ y_start *_width + x_start];
 			uint16_t * pfbPixel;
 			// First lets fill in the top parts above the actual rectangle...
@@ -3614,6 +4222,8 @@ bool ILI9486_t3n::gfxFontLastCharPosFG(int16_t x, int16_t y) {
     return ((gfxFont->bitmap[glyph->bitmapOffset + (pixel_bit_offset >> 3)]) & (0x80 >> (pixel_bit_offset & 0x7)));
 }
 
+
+
 void ILI9486_t3n::setCursor(int16_t x, int16_t y, bool autoCenter) {
 	_center_x_text = autoCenter;	// remember the state. 
 	_center_y_text = autoCenter;	// remember the state. 
@@ -3632,9 +4242,11 @@ void ILI9486_t3n::setCursor(int16_t x, int16_t y, bool autoCenter) {
 	else if (y >= _height) y = _height - 1;
 	cursor_y = y;
 	
-	
+	if(x>=scroll_x && x<=(scroll_x+scroll_width) && y>=scroll_y && y<=(scroll_y+scroll_height)){
+		isWritingScrollArea	= true;
+	} else {
 		isWritingScrollArea = false;
-	
+	}
 	_gfx_last_char_x_write = 0;	// Don't use cached data here
 
 }
@@ -3729,7 +4341,7 @@ int16_t ILI9486_t3n::drawFloat(float floatNumber, int dp, int poX, int poY)
   if (dp > 7) dp = 7; // Limit the size of decimal portion
 
   // Adjust the rounding value
-  for (uint8_t i = 0; i < dp; ++i) rounding /= 10.0;
+  for (uint8_t i = 0; i < dp; ++i) rounding /= 10.0f;
 
   if (floatNumber < -rounding)    // add sign, avoid adding - sign to 0.0!
   {
@@ -3880,6 +4492,40 @@ int16_t ILI9486_t3n::drawString1(char string[], int16_t len, int poX, int poY)
   }
 return sumX;
 }
+
+
+void ILI9486_t3n::scrollTextArea(uint8_t scrollSize){
+	uint16_t awColors[scroll_width];
+	for (int y=scroll_y+scrollSize; y < (scroll_y+scroll_height); y++) { 
+		readRect(scroll_x, y, scroll_width, 1, awColors); 
+		writeRect(scroll_x, y-scrollSize, scroll_width, 1, awColors);  
+	}
+	fillRect(scroll_x, (scroll_y+scroll_height)-scrollSize, scroll_width, scrollSize, scrollbgcolor);
+}
+
+void ILI9486_t3n::setScrollTextArea(int16_t x, int16_t y, int16_t w, int16_t h){
+	scroll_x = x; 
+	scroll_y = y;
+	scroll_width = w; 
+	scroll_height = h;
+}
+
+void ILI9486_t3n::setScrollBackgroundColor(uint16_t color){
+	scrollbgcolor=color;
+	fillRect(scroll_x,scroll_y,scroll_width,scroll_height,scrollbgcolor);
+}
+
+void ILI9486_t3n::enableScroll(void){
+	scrollEnable = true;
+}
+
+void ILI9486_t3n::disableScroll(void){
+	scrollEnable = false;
+}
+
+void ILI9486_t3n::resetScrollBackgroundColor(uint16_t color){
+	scrollbgcolor=color;
+}	
 
 
 
