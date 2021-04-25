@@ -1,61 +1,6 @@
+// This library is for Waveshare 4inch RPi LCD (C) with ILI9486 and Teensy 4.x usage only
+// Forked from:
 // https://github.com/kurte/ILI9341_t3n
-// http://forum.pjrc.com/threads/26305-Highly-optimized-ILI9341-(320x240-TFT-color-display)-library
-//
-// Warning this is Kurt's hacked up version whcih allow different SPI busses, which hopefully 
-//         will no longer be reliant on the SPIN library.  
-//
-// Also allows use on only one valid CS pin on that buss, which must be used for DC
-
-/***************************************************
-  This is our library for the Adafruit  ILI9341 Breakout and Shield
-  ----> http://www.adafruit.com/products/1651
-
-  Check out the links above for our tutorials and wiring diagrams
-  These displays use SPI to communicate, 4 or 5 pins are required to
-  interface (RST is optional)
-  Adafruit invests time and resources providing this open source code,
-  please support Adafruit and open-source hardware by purchasing
-  products from Adafruit!
-
-  Written by Limor Fried/Ladyada for Adafruit Industries.
-  MIT license, all text above must be included in any redistribution
- ****************************************************/
-
-// <SoftEgg>
-
-//Additional graphics routines by Tim Trzepacz, SoftEgg LLC added December 2015
-//(And then accidentally deleted and rewritten March 2016. Oops!)
-//Gradient support
-//----------------
-//		fillRectVGradient	- fills area with vertical gradient
-//		fillRectHGradient	- fills area with horizontal gradient
-//		fillScreenVGradient - fills screen with vertical gradient
-// 	fillScreenHGradient - fills screen with horizontal gradient
-
-//Additional Color Support
-//------------------------
-//		color565toRGB		- converts 565 format 16 bit color to RGB
-//		color565toRGB14		- converts 16 bit 565 format color to 14 bit RGB (2 bits clear for math and sign)
-//		RGB14tocolor565		- converts 14 bit RGB back to 16 bit 565 format color
-
-//Low Memory Bitmap Support
-//-------------------------
-// writeRect8BPP - 	write 8 bit per pixel paletted bitmap
-// writeRect4BPP - 	write 4 bit per pixel paletted bitmap
-// writeRect2BPP - 	write 2 bit per pixel paletted bitmap
-// writeRect1BPP - 	write 1 bit per pixel paletted bitmap
-
-//String Pixel Length support
-//---------------------------
-//		strPixelLen			- gets pixel length of given ASCII string
-
-// <\SoftEgg>
-// Also some of this comes from the DMA version of the library...
-
-/* ILI9341_t3DMA library code is placed under the MIT license
- * Copyright (c) 2016 Frank Bösing
- *
-*/
 
 #ifndef _ILI9486_t3NH_
 #define _ILI9486_t3NH_
@@ -68,7 +13,16 @@
 
 // Allow us to enable or disable capabilities, particully Frame Buffer and Clipping for speed and size
 #ifndef DISABLE_ILI9486_FRAMEBUFFER
+#if defined(__MK66FX1M0__)	// T3.6
 #define ENABLE_ILI9486_FRAMEBUFFER
+#define SCREEN_DMA_NUM_SETTINGS 3 // see if making it a constant value makes difference...
+#elif defined(__MK64FX512__) // T3.5 
+#define ENABLE_ILI9486_FRAMEBUFFER
+#define SCREEN_DMA_NUM_SETTINGS 4 // see if making it a constant value makes difference...
+#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)
+#define ENABLE_ILI9486_FRAMEBUFFER
+#define SCREEN_DMA_NUM_SETTINGS 3 // see if making it a constant value makes difference...
+#endif
 #endif
 
 // Allow way to override using SPI
@@ -139,7 +93,10 @@
 
 #define ILI9486_GMCTRP1 0xE0
 #define ILI9486_GMCTRN1 0xE1
+/*
+#define ILI9486_PWCTR6  0xFC
 
+*/
 
 // Color definitions
 #define ILI9486_BLACK       0x0000      /*   0,   0,   0 */
@@ -164,6 +121,9 @@
 #define ILI9486_GREY 		0x2104 // Dark grey 16 bit colour
 
 #define CL(_r,_g,_b) ((((_r)&0xF8)<<8)|(((_g)&0xFC)<<3)|((_b)>>3))
+#ifndef ILI9486_swap
+#define ILI9486_swap(a, b) { typeof(a) t = a; a = b; b = t; }
+#endif
 
 #define sint16_t int16_t
 
@@ -205,11 +165,18 @@ typedef struct {
 #define BL_DATUM 6 // Bottom left
 #define BC_DATUM 7 // Bottom centre
 #define BR_DATUM 8 // Bottom right
+//#define L_BASELINE  9 // Left character baseline (Line the 'A' character would sit on)
+//#define C_BASELINE 10 // Centre character baseline
+//#define R_BASELINE 11 // Right character baseline
+
 
 #ifdef __cplusplus
 // At all other speeds, _pspi->beginTransaction() will use the fastest available clock
-#define ILI9486_SPICLOCK 30e6 //30000000u //115e6 //valid speeds are (120mhz, 80mhz, 60mhz, 48, 40, 34.29, 30mhz, 26.67, 24mhz
+
+#define ILI9486_SPICLOCK 80e6 //valid speeds are (120mhz, 80mhz, 60mhz, 48, 40, 34.29, 30mhz, 26.67, 24mhz
 #define ILI9486_SPICLOCK_READ 2000000
+
+
 
 class ILI9486_t3n : public Print
 {
@@ -232,6 +199,7 @@ class ILI9486_t3n : public Print
 	void fillScreenHGradient(uint16_t color1, uint16_t color2);
 
 	void setRotation(uint8_t r);
+	void setScroll(uint16_t offset);
 	void invertDisplay(boolean i);
 	void setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 	// Pass 8-bit (each) R,G,B, get back 16-bit packed color
@@ -261,6 +229,12 @@ class ILI9486_t3n : public Print
 		return (((r & 0x3E00) << 2) | ((g & 0x3F00) >>3) | ((b & 0x3E00) >> 9));
 	}
 	
+	//uint8_t readdata(void);
+	uint8_t readcommand8(uint8_t reg, uint8_t index = 0);
+
+	// Added functions to read pixel data...
+	uint16_t readPixel(int16_t x, int16_t y);
+	void readRect(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t *pcolors);
 	void writeRect(int16_t x, int16_t y, int16_t w, int16_t h, const uint16_t *pcolors);
 
 	// writeRect8BPP - 	write 8 bit per pixel paletted bitmap
@@ -305,6 +279,7 @@ class ILI9486_t3n : public Print
 	void drawBitmap(int16_t x, int16_t y, const uint8_t *bitmap, int16_t w, int16_t h, uint16_t color);
 	//Balzers code
 	void drawTransparentBgPicRotated(int x, int y, int w, int h, const uint16_t* pic, const uint16_t backColor, int centerX, int centerY, int rotAngle);
+	void drawValRing(int x, int y, int w, int h, const uint16_t* pic, int Angle);
 	void drawPicBrightness(int x, int y, int w, int h, const uint16_t* pic, int brightness);
 	void fadeInScreen(int factor);
 	
@@ -383,6 +358,18 @@ class ILI9486_t3n : public Print
 
 	void setTextDatum(uint8_t datum);
 	
+	// added support for scrolling text area
+	// https://github.com/vitormhenrique/ILI9486_t3
+	// Discussion regarding this optimized version:
+    //http://forum.pjrc.com/threads/26305-Highly-optimized-ILI9486-%28320x240-TFT-color-display%29-library
+	//	
+	void setScrollTextArea(int16_t x, int16_t y, int16_t w, int16_t h);
+	void setScrollBackgroundColor(uint16_t color);
+	void enableScroll(void);
+	void disableScroll(void);
+	void scrollTextArea(uint8_t scrollSize);
+	void resetScrollBackgroundColor(uint16_t color);
+
 	// added support to use optional Frame buffer
 	enum {ILI9486_DMA_INIT=0x01, ILI9486_DMA_CONT=0x02, ILI9486_DMA_FINISH=0x04,ILI9486_DMA_ACTIVE=0x80};
 	void	setFrameBuffer(uint16_t *frame_buffer);
@@ -393,27 +380,107 @@ class ILI9486_t3n : public Print
 	void	waitUpdateAsyncComplete(void);
 	void	endUpdateAsync();			 // Turn of the continueous mode fla
 	void	dumpDMASettings();
-	
 	#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	uint16_t *getFrameBuffer() {return _pfbtft;}
 	uint32_t frameCount() {return _dma_frame_count; }
+	uint16_t subFrameCount() {return _dma_sub_frame_count; }
 	boolean	asyncUpdateActive(void)  {return (_dma_state & ILI9486_DMA_ACTIVE);}
 	void	initDMASettings(void);
+	void	setFrameCompleteCB(void (*pcb)(), bool fCallAlsoHalfDone=false);
 	#else
 	uint32_t frameCount() {return 0; }
+	uint16_t subFrameCount() {return 0; }
 	uint16_t *getFrameBuffer() {return NULL;}
 	boolean	asyncUpdateActive(void)  {return false;}
 	#endif
-	
  protected:
 	SPIClass *_pspi = nullptr;
 	SPIClass::SPI_Hardware_t *_spi_hardware;
+	
+	
+	bool pieMask[18326]; //18326 = result of image width * height
+	void drawMaskLine(int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
+		int x;
+		int y;
+		int w = abs(x1 - x0);
+		w++;
+		int h = abs(y1 - y0);
+		h++;
 
+		if (w > h) {
+			//x is longer
+			for (int i = 0; i < w; i++) {
+				if (x1 - x0 < 0) x = x0 + (-1 * i);
+				else 
+					x = x0 + i;
+
+				if (y1 - y0 < 0) y = y0 + (-1 * i * (float)h / (float)w);
+				else y = y0 + (i * (float)h / (float)w);
+
+				int index = y*154+x; //154 = image width
+				pieMask[index] = 1;
+				index = y*154+x+1; //154 = image width
+				pieMask[index] = 1;
+			}
+		} else {
+			//y is longer
+			for (int i = 0; i < h; i++) {
+				if (x1 - x0 < 0) x = x0 + (-1 * i * (float)w / (float)h);
+				else x = x0 + (i * (float)w / (float)h);
+			  
+				if (y1 - y0 < 0) y = y0 + (-1 * i);
+				else y = y0 + i;
+			  
+				int index = y*154+x;
+				pieMask[index] = 1;
+				index = y*154+x+1;
+				pieMask[index] = 1;
+			}
+		}
+	}
+
+	void fillPie(int x, int y, int r, int startAngle, int endAngle){
+		memset(pieMask,0,18326); //set global bool array pieMask to zero
+		
+		startAngle -= 180;
+		endAngle   -= 180;
+		if (startAngle>endAngle) startAngle -= 360;
+		float steps=0.2;
+		int x1,y1,x2,y2;
+		
+		x1=x + cos(((float)startAngle*PI)/180.0f) * (float)r;
+		y1=y + sin(((float)startAngle*PI)/180.0f) * (float)r;
+		
+		for (float i=0+steps;i<endAngle-startAngle-steps;i+=steps)
+		{
+			x2=x + cos((((float)startAngle+i)*PI)/180.0f) * (float)r;
+			y2=y + sin((((float)startAngle+i)*PI)/180.0f) * (float)r;
+			
+			if ((x1!=x2) or (y1!=y2)){
+				drawMaskLine(x,y,x2,y2);
+			}
+			x1=x2;
+			y1=y2;
+		}
+	}
+	
+	bool checkPieBounds(int x, int y){
+		int index = y*154+x; //154 = image width
+		return pieMask[index];
+	}
+	
   	uint8_t   	_spi_num;         	// Which buss is this spi on? 
 	uint32_t 	_SPI_CLOCK;			// #define ILI9486_SPICLOCK 30000000
 	uint32_t	_SPI_CLOCK_READ; 	//#define ILI9486_SPICLOCK_READ 2000000
 
-	IMXRT_LPSPI_t *_pimxrt_spi;
+#if defined(KINETISK)
+ 	KINETISK_SPI_t *_pkinetisk_spi;
+#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
+ 	IMXRT_LPSPI_t *_pimxrt_spi;
+
+#elif defined(KINETISL)
+ 	KINETISL_SPI_t *_pkinetisl_spi;
+#endif
 
 	int16_t _width, _height; // Display w/h as modified by current rotation
 	int16_t  cursor_x, cursor_y;
@@ -470,6 +537,7 @@ class ILI9486_t3n : public Print
 	uint16_t _gfx_last_char_textbgcolor;
 	bool gfxFontLastCharPosFG(int16_t x, int16_t y);
 	
+
   	uint8_t  _rst;
   	uint8_t _cs, _dc;
 	uint8_t pcs_data, pcs_command;
@@ -477,30 +545,62 @@ class ILI9486_t3n : public Print
 
     ///////////////////////////////
 	// BUGBUG:: reorganize this area better!
-	uint8_t pending_rx_count = 0; // hack ...
+	#if defined(KINETISK)
+    //inline uint8_t sizeFIFO() {return _fifo_size; }
+  	uint32_t _fifo_full_test;
     void waitFifoNotFull(void);
     void waitFifoEmpty(void);
     void waitTransmitComplete(void) ;
     void waitTransmitComplete(uint32_t mcr);
+
+	#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)
+    uint8_t pending_rx_count = 0; // hack ...
+    void waitFifoNotFull(void);
+    void waitFifoEmpty(void);
+    void waitTransmitComplete(void) ;
+    void waitTransmitComplete(uint32_t mcr);
+	#elif defined(KINETISL)
+	#endif  
     //////////////////////////////
 
+
 	// add support to allow only one hardware CS (used for dc)
+#if defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
     uint32_t _cspinmask;
     volatile uint32_t *_csport;
     uint32_t _spi_tcr_current;
     uint32_t _dcpinmask;
+    uint32_t _tcr_dc_assert;
+    uint32_t _tcr_dc_not_assert;
     volatile uint32_t *_dcport;
-
+#else
+    uint8_t _cspinmask;
+    volatile uint8_t *_csport;
+#endif
+#ifdef KINETISL
+    volatile uint8_t  *_dcport;
+    uint8_t _dcpinmask;
+#endif
 #ifdef ENABLE_ILI9486_FRAMEBUFFER
     // Add support for optional frame buffer
     uint16_t	*_pfbtft;						// Optional Frame buffer 
     uint8_t		_use_fbtft;						// Are we in frame buffer mode?
     uint16_t	*_we_allocated_buffer;			// We allocated the buffer; 
+	int16_t  	_changed_min_x, _changed_max_x, _changed_min_y, _changed_max_y;
+	bool 		_updateChangedAreasOnly = true;	// current default off, 
+	void		(*_frame_complete_callback)() = nullptr;
+	bool 		_frame_callback_on_HalfDone = false;
+
     // Add DMA support. 
+#if defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
     uint16_t	*_pfbtft_async;					// pointer to async buffer at start of async operation...
 	static  ILI9486_t3n 		*_dmaActiveDisplay[3];  // Use pointer to this as a way to get back to object...
+#else
+	static  ILI9486_t3n 		*_dmaActiveDisplay;  // Use pointer to this as a way to get back to object...
+#endif
 	volatile uint8_t  	_dma_state = 0;  		// DMA status
 	volatile uint32_t	_dma_frame_count = 0;	// Can return a frame count...
+	volatile uint16_t 	_dma_sub_frame_count = 0; // Can return a frame count...
 	#if defined(__MK66FX1M0__) 
 	// T3.6 use Scatter/gather with chain to do transfer
 	static DMASetting 	_dmasettings[4];
@@ -510,20 +610,15 @@ class ILI9486_t3n : public Print
 	  // as to move it out of the memory that is cached...
 
 	static const uint32_t _count_pixels = ILI9486_TFTWIDTH * ILI9486_TFTHEIGHT;
-
-	DMASetting   		_dmasettings[2];
+	DMASetting   		_dmasettings[3];
 	DMAChannel   		_dmatx;
 	volatile    uint32_t _dma_pixel_index = 0;
-	volatile uint16_t 	_dma_sub_frame_count = 0; // Can return a frame count...
 	uint16_t          	_dma_buffer_size;   // the actual size we are using <= DMA_BUFFER_SIZE;
 	uint16_t          	_dma_cnt_sub_frames_per_frame;  
-	static const uint16_t    DMA_BUFFER_SIZE = 960;
-	uint16_t          	_dma_buffer1[DMA_BUFFER_SIZE] __attribute__ ((aligned(4)));
-	uint16_t          	_dma_buffer2[DMA_BUFFER_SIZE] __attribute__ ((aligned(4)));
 	uint32_t 				_spi_fcr_save;		// save away previous FCR register value
 	static void dmaInterrupt1(void);
 	static void dmaInterrupt2(void);
-	#else
+	#elif defined(__MK64FX512__)
 	// T3.5 - had issues scatter/gather so do just use channels/interrupts
 	// and update and continue
 	static DMAChannel  	_dmatx;
@@ -537,22 +632,31 @@ class ILI9486_t3n : public Print
   void charBounds(char c, int16_t *x, int16_t *y,
       			int16_t *minx, int16_t *miny, int16_t *maxx, int16_t *maxy);
 
-	
+	uint16_t _previous_addr_y0 = 0xffff; 
+	uint16_t _previous_addr_y1 = 0xffff;
+  
 	void setAddr(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
 	  __attribute__((always_inline)) {
+		  
 		writecommand_cont(ILI9486_CASET); // Column addr set
 		writedata8_cont((uint8_t)(x0 >> 8));   // XSTART
 		writedata8_cont((uint8_t)(x0 & 0xFF));   // XSTART
 		writedata8_cont((uint8_t)(x1 >> 8));   // XEND
 		writedata8_cont((uint8_t)(x1 & 0xFF));   // XEND
-		writecommand_cont(ILI9486_PASET); // Row addr set
-		writedata8_cont((uint8_t)(y0 >> 8));   // YSTART
-		writedata8_cont((uint8_t)(y0 & 0xFF));   // YSTART
-		writedata8_cont((uint8_t)(y1 >> 8));   // YEND
-		writedata8_cont((uint8_t)(y1 & 0xFF));   // YEND
+		
+		if ((y0 != _previous_addr_y0) || (y1 != _previous_addr_y1)) {
+			writecommand_cont(ILI9486_PASET); // Row addr set
+			writedata8_cont((uint8_t)(y0 >> 8));   // YSTART
+			writedata8_cont((uint8_t)(y0 & 0xFF));   // YSTART
+			writedata8_cont((uint8_t)(y1 >> 8));   // YEND
+			writedata8_cont((uint8_t)(y1 & 0xFF));   // YEND
+			_previous_addr_y0 = y0;
+			_previous_addr_y1 = y1;
+		}
 	}
-	
 //. From Onewire utility files
+#if defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x
+
 
 	void DIRECT_WRITE_LOW(volatile uint32_t * base, uint32_t mask)  __attribute__((always_inline)) {
 		*(base+34) = mask;
@@ -560,20 +664,60 @@ class ILI9486_t3n : public Print
 	void DIRECT_WRITE_HIGH(volatile uint32_t * base, uint32_t mask)  __attribute__((always_inline)) {
 		*(base+33) = mask;
 	}
+#endif
 
 	void beginSPITransaction(uint32_t clock) __attribute__((always_inline)) {
 		_pspi->beginTransaction(SPISettings(clock, MSBFIRST, SPI_MODE0));
+		#if defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
+		if (!_dcport) _spi_tcr_current = _pimxrt_spi->TCR; 	// Only if DC is on hardware CS 
+		#endif
 		if (_csport) {
+#if defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
 			DIRECT_WRITE_LOW(_csport, _cspinmask);
+#else
+			*_csport  &= ~_cspinmask;
+#endif
 		}
 	}
 	void endSPITransaction() __attribute__((always_inline)) {
 		if (_csport) {
+#if defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
 			DIRECT_WRITE_HIGH(_csport, _cspinmask);
+#else
+			*_csport |= _cspinmask;
+#endif
 		}
 		_pspi->endTransaction();
 	}
-
+#if defined(KINETISK)	
+	void writecommand_cont(uint8_t c) __attribute__((always_inline)) {
+		_pkinetisk_spi->PUSHR = c | (pcs_command << 16) | SPI_PUSHR_CTAS(0) | SPI_PUSHR_CONT;
+		waitFifoNotFull();
+	}
+	void writedata8_cont(uint8_t c) __attribute__((always_inline)) {
+		_pkinetisk_spi->PUSHR = c | (pcs_data << 16) | SPI_PUSHR_CTAS(0) | SPI_PUSHR_CONT;
+		waitFifoNotFull();
+	}
+	void writedata16_cont(uint16_t d) __attribute__((always_inline)) {
+		_pkinetisk_spi->PUSHR = d | (pcs_data << 16) | SPI_PUSHR_CTAS(1) | SPI_PUSHR_CONT;
+		waitFifoNotFull();
+	}
+	void writecommand_last(uint8_t c) __attribute__((always_inline)) {
+		uint32_t mcr = _pkinetisk_spi->MCR;
+		_pkinetisk_spi->PUSHR = c | (pcs_command << 16) | SPI_PUSHR_CTAS(0) | SPI_PUSHR_EOQ;
+		waitTransmitComplete(mcr);
+	}
+	void writedata8_last(uint8_t c) __attribute__((always_inline)) {
+		uint32_t mcr = _pkinetisk_spi->MCR;
+		_pkinetisk_spi->PUSHR = c | (pcs_data << 16) | SPI_PUSHR_CTAS(0) | SPI_PUSHR_EOQ;
+		waitTransmitComplete(mcr);
+	}
+	void writedata16_last(uint16_t d) __attribute__((always_inline)) {
+		uint32_t mcr = _pkinetisk_spi->MCR;
+		_pkinetisk_spi->PUSHR = d | (pcs_data << 16) | SPI_PUSHR_CTAS(1) | SPI_PUSHR_EOQ;
+		waitTransmitComplete(mcr);
+	}
+#elif defined(__IMXRT1052__) || defined(__IMXRT1062__)  // Teensy 4.x 
 	#define TCR_MASK  (LPSPI_TCR_PCS(3) | LPSPI_TCR_FRAMESZ(31) | LPSPI_TCR_CONT | LPSPI_TCR_RXMSK )
 	void maybeUpdateTCR(uint32_t requested_tcr_state) /*__attribute__((always_inline)) */ {
 		if ((_spi_tcr_current & TCR_MASK) != requested_tcr_state) {
@@ -632,6 +776,156 @@ class ILI9486_t3n : public Print
 	void writedata16_last(uint16_t d) __attribute__((always_inline)) {
 		spiTransfer_cont(uint8_t(d >> 8), 1);
 		spiTransfer_last(uint8_t(d & 0xff), 1);
+	}
+
+#elif defined (KINETISL)
+// Lets see how hard to make it work OK with T-LC
+	uint8_t _dcpinAsserted;
+	uint8_t _data_sent_not_completed;
+	void waitTransmitComplete()  {
+		while (_data_sent_not_completed) {
+			uint16_t timeout_count = 0xff; // hopefully enough 
+			while (!(_pkinetisl_spi->S & SPI_S_SPRF) && timeout_count--) ; // wait 
+			uint8_t d __attribute__((unused));
+			d = _pkinetisl_spi->DL;
+			d = _pkinetisl_spi->DH;
+			_data_sent_not_completed--; // We hopefully received our data...
+		}
+	}
+	uint16_t waitTransmitCompleteReturnLast()  {
+		uint16_t d = 0;
+		while (_data_sent_not_completed) {
+			uint16_t timeout_count = 0xff; // hopefully enough 
+			while (!(_pkinetisl_spi->S & SPI_S_SPRF) && timeout_count--) ; // wait 
+			d = (_pkinetisl_spi->DH << 8) | _pkinetisl_spi->DL;
+			_data_sent_not_completed--; // We hopefully received our data...
+		}
+		return d;
+	}
+
+	void setCommandMode() __attribute__((always_inline)) {
+		if (!_dcpinAsserted) {
+			waitTransmitComplete();
+			*_dcport  &= ~_dcpinmask;
+			_dcpinAsserted = 1;
+		}
+	}
+
+	void setDataMode() __attribute__((always_inline)) {
+		if (_dcpinAsserted) {
+			waitTransmitComplete();
+			*_dcport  |= _dcpinmask;
+			_dcpinAsserted = 0;
+		}
+	}
+
+	void outputToSPI(uint8_t c) {
+		if (_pkinetisl_spi->C2 & SPI_C2_SPIMODE) {
+			// Wait to change modes until any pending output has been done.
+			waitTransmitComplete();
+			_pkinetisl_spi->C2 = 0; // make sure 8 bit mode.
+		}
+		while (!(_pkinetisl_spi->S & SPI_S_SPTEF)) ; // wait if output buffer busy.
+		// Clear out buffer if there is something there...
+		if  ((_pkinetisl_spi->S & SPI_S_SPRF)) {
+			uint8_t d __attribute__((unused));
+			d = _pkinetisl_spi->DL;
+			_data_sent_not_completed--;
+		} 
+		_pkinetisl_spi->DL = c; // output byte
+		_data_sent_not_completed++; // let system know we sent something	
+	}
+
+	void outputToSPI16(uint16_t data)  {
+		if (!(_pkinetisl_spi->C2 & SPI_C2_SPIMODE)) {
+			// Wait to change modes until any pending output has been done.
+			waitTransmitComplete();
+			_pkinetisl_spi->C2 = SPI_C2_SPIMODE; // make sure 8 bit mode.
+		}
+		uint8_t s;
+		do {
+			s = _pkinetisl_spi->S;
+			 // wait if output buffer busy.
+			// Clear out buffer if there is something there...
+			if  ((s & SPI_S_SPRF)) {
+				uint8_t d __attribute__((unused));
+				d = _pkinetisl_spi->DL;
+				d = _pkinetisl_spi->DH;
+				_data_sent_not_completed--; 	// let system know we sent something	
+			}
+
+		} while (!(s & SPI_S_SPTEF) || (s & SPI_S_SPRF));
+
+		_pkinetisl_spi->DL = data; 		// output low byte
+		_pkinetisl_spi->DH = data >> 8; // output high byte
+		_data_sent_not_completed++; 	// let system know we sent something	
+	}
+
+	void writecommand_cont(uint8_t c)  {
+		setCommandMode();
+		outputToSPI(c);
+	}
+	void writedata8_cont(uint8_t c) {
+		setDataMode();
+		outputToSPI(c);
+	}
+
+	void writedata16_cont(uint16_t c)  {
+		setDataMode();
+		outputToSPI16(c);
+	}
+
+	void writecommand_last(uint8_t c)  {
+		setCommandMode();
+		outputToSPI(c);
+		waitTransmitComplete();
+	}
+	void writedata8_last(uint8_t c)  {
+		setDataMode();
+		outputToSPI(c);
+		waitTransmitComplete();
+	}
+	void writedata16_last(uint16_t c) {
+		setDataMode();
+		outputToSPI16(c);
+		waitTransmitComplete();
+	}
+
+#endif
+
+	#ifdef ENABLE_ILI9486_FRAMEBUFFER
+	void clearChangedRange() {
+		_changed_min_x = 0x7fff;
+		_changed_max_x = -1;
+		_changed_min_y = 0x7fff;
+		_changed_max_y = -1;
+  	}
+
+	void updateChangedRange(int16_t x, int16_t y, int16_t w, int16_t h)
+	  	__attribute__((always_inline)) {
+	 	if (x < _changed_min_x) _changed_min_x = x;	
+	 	if (y < _changed_min_y) _changed_min_y = y;	
+	 	x += w - 1;
+	 	y += h - 1;
+	 	if (x > _changed_max_x) _changed_max_x = x;	
+	 	if (y > _changed_max_y) _changed_max_y = y;	
+	}
+
+	//could combine with above, but avoids the +-...
+	void updateChangedRange(int16_t x, int16_t y)
+	  	__attribute__((always_inline)) {
+	 	if (x < _changed_min_x) _changed_min_x = x;	
+	 	if (y < _changed_min_y) _changed_min_y = y;	
+	 	if (x > _changed_max_x) _changed_max_x = x;	
+	 	if (y > _changed_max_y) _changed_max_y = y;	
+	}
+	
+	#endif
+
+	void updateChangedAreasOnly(bool updateChangedOnly) {
+#ifdef ENABLE_ILI9486_FRAMEBUFFER
+		_updateChangedAreasOnly = updateChangedOnly;
+#endif
 	}
 
 	void HLine(int16_t x, int16_t y, int16_t w, uint16_t color)
@@ -715,6 +1009,7 @@ class ILI9486_t3n : public Print
 
 		#ifdef ENABLE_ILI9486_FRAMEBUFFER
 	  	if (_use_fbtft) {
+			updateChangedRange(x, y);		// update the range of the screen that has been changed;
 	  		_pfbtft[y*_width + x] = color;
 	  		return;
 	  	}
@@ -729,9 +1024,7 @@ class ILI9486_t3n : public Print
 
 };
 
-#ifndef swapp
-#define swapp(a, b) { typeof(a) t = a; a = b; b = t; }
-#endif
+
 
 // To avoid conflict when also using Adafruit_GFX or any Adafruit library
 // which depends on Adafruit_GFX, #include the Adafruit library *BEFORE*
