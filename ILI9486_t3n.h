@@ -37,6 +37,9 @@
 
 #include "ILI9486_fonts.h"
 
+// Uncomment to use LCD(A), by default it works with LCD(C)
+//#define IS_VER_A
+
 #define ILI9486_TFTWIDTH  320
 #define ILI9486_TFTHEIGHT 480
 
@@ -173,7 +176,12 @@ typedef struct {
 #ifdef __cplusplus
 // At all other speeds, _pspi->beginTransaction() will use the fastest available clock
 
-#define ILI9486_SPICLOCK 80e6 //valid speeds are (120mhz, 80mhz, 60mhz, 48, 40, 34.29, 30mhz, 26.67, 24mhz
+#ifdef IS_VER_A
+	#define ILI9486_SPICLOCK 30e6 //valid speeds are (120mhz, 80mhz, 60mhz, 48, 40, 34.29, 30mhz, 26.67, 24mhz
+#else
+	#define ILI9486_SPICLOCK 80e6 //valid speeds are (120mhz, 80mhz, 60mhz, 48, 40, 34.29, 30mhz, 26.67, 24mhz
+#endif
+
 #define ILI9486_SPICLOCK_READ 2000000
 
 
